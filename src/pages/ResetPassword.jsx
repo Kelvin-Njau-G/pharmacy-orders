@@ -1,13 +1,51 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function ResetPassword() {
-  const [password,  setPassword]  = useState('')
-  const [confirm,    setConfirm]   = useState('')
-  const [error,      setError]     = useState('')
-  const [loading,    setLoading]   = useState(false)
+  const [password,     setPassword]     = useState('')
+  const [confirm,       setConfirm]       = useState('')
+  const [error,         setError]         = useState('')
+  const [loading,       setLoading]       = useState(false)
+  const [ready,         setReady]         = useState(false)
+  const [sessionError,  setSessionError]  = useState('')
   const navigate = useNavigate()
+
+  // The reset link can hand us the token in two different shapes
+  // depending on Supabase's configured auth flow. We check for both
+  // and explicitly establish the session ourselves, rather than relying
+  // on it happening automatically in the background.
+  useEffect(() => {
+    establishSession()
+  }, [])
+
+  async function establishSession() {
+    try {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const access_token  = hashParams.get('access_token')
+      const refresh_token = hashParams.get('refresh_token')
+
+      const searchParams = new URLSearchParams(window.location.search)
+      const code = searchParams.get('code')
+
+      if (access_token && refresh_token) {
+        const { error } = await supabase.auth.setSession({ access_token, refresh_token })
+        if (error) throw error
+      } else if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code)
+        if (error) throw error
+      } else {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) throw new Error('No reset token found.')
+      }
+
+      // Clean the token out of the visible URL now that it's been used.
+      window.history.replaceState({}, '', '/reset-password')
+      setReady(true)
+    } catch (err) {
+      setSessionError('This password reset link is invalid or has expired. Please request a new one.')
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -44,42 +82,61 @@ export default function ResetPassword() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">New password</label>
-              <input
-                type="password" value={password} onChange={e => setPassword(e.target.value)}
-                required autoComplete="new-password" autoFocus
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="At least 6 characters"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Confirm password</label>
-              <input
-                type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
-                required autoComplete="new-password"
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Re-enter your password"
-              />
-            </div>
 
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                <p className="text-sm text-red-600">{error}</p>
+          {sessionError ? (
+            <div className="text-center">
+              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-5">
+                <p className="text-sm text-red-600">{sessionError}</p>
               </div>
-            )}
+              <button
+                onClick={() => navigate('/login')}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                ← Back to sign in
+              </button>
+            </div>
+          ) : !ready ? (
+            <div className="flex justify-center py-6">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">New password</label>
+                <input
+                  type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  required autoComplete="new-password" autoFocus
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="At least 6 characters"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Confirm password</label>
+                <input
+                  type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
+                  required autoComplete="new-password"
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
+                    focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Re-enter your password"
+                />
+              </div>
 
-            <button
-              type="submit" disabled={loading}
-              className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2.5 px-4
-                rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed mt-1"
-            >
-              {loading ? 'Saving…' : 'Save password and continue'}
-            </button>
-          </form>
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                  <p className="text-sm text-red-600">{error}</p>
+                </div>
+              )}
+
+              <button
+                type="submit" disabled={loading}
+                className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2.5 px-4
+                  rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed mt-1"
+              >
+                {loading ? 'Saving…' : 'Save password and continue'}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     </div>
