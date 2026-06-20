@@ -11,6 +11,8 @@ import AdminConsole  from './pages/AdminConsole'
 
 // Catches Supabase's "password recovery" link, wherever it lands,
 // and routes the person to the set-new-password screen.
+// (Kept as a backup in case the recovery hash is detected slightly
+// after the initial route decision below.)
 function RecoveryRedirect() {
   const navigate = useNavigate()
   useEffect(() => {
@@ -22,6 +24,19 @@ function RecoveryRedirect() {
     return () => subscription.unsubscribe()
   }, [navigate])
   return null
+}
+
+// The root path ("/") needs special care: Supabase's password-recovery
+// link lands here with a secret token in the URL fragment (after the #).
+// If we redirect to /dashboard naively, React Router drops that fragment
+// before Supabase has a chance to read it. So we check for it first and,
+// if present, carry the fragment along to the reset-password screen.
+function RootRedirect() {
+  const isRecovery = typeof window !== 'undefined' && window.location.hash.includes('type=recovery')
+  if (isRecovery) {
+    return <Navigate to={`/reset-password${window.location.hash}`} replace />
+  }
+  return <Navigate to="/dashboard" replace />
 }
 
 export default function App() {
@@ -41,8 +56,8 @@ export default function App() {
           <Route path="/admin" element={
             <ProtectedRoute adminOnly><AdminConsole /></ProtectedRoute>
           } />
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="*" element={<RootRedirect />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
