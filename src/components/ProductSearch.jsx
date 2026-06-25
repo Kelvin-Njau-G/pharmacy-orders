@@ -21,7 +21,11 @@ export default function ProductSearch({ value, onSelect, disabled }) {
           return
         }
         fuseRef.current = new Fuse(products, {
-          keys: ['name'], threshold: 0.4, includeScore: true,
+          keys: ['name'],
+          threshold: 0.4,       // 0 = exact, 1 = match anything
+          ignoreLocation: true, // search the whole string, not just the start
+          minMatchCharLength: 2,
+          includeScore: true,
         })
         setProductCount(products.length)
         setStatusMsg('')   // clear — show placeholder instead
