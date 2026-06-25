@@ -8,15 +8,13 @@ import StatusBadge from '../components/StatusBadge'
 // ── Update this list to match your actual pharmacy locations ────────────────
 const LOCATIONS = [
   'Head Office',
-  'Branch — Westlands',
-  'Branch — Karen',
-  'Branch — Kilimani',
-  'Branch — Eastleigh',
-  'Branch — Thika Road',
-  'Branch — Lang\'ata',
-  'Branch — South C',
-  'Branch — Ngong',
-  'Branch — Kikuyu',
+  'Well Living Medical Clinic',
+  'City Star Hospital',
+  'Libken Medical Centre Limited',
+  'PCEA St Timothy Medical Centre Limited',
+  'Healmerc Pharmacy Limited',
+  'Qaalane Pharmacy and Medical Centre',
+  
 ]
 
 function fmt(n) {
