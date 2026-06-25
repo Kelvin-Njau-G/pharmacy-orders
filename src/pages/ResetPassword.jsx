@@ -3,60 +3,57 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function ResetPassword() {
-  const [password,     setPassword]     = useState('')
-  const [confirm,       setConfirm]       = useState('')
-  const [error,         setError]         = useState('')
-  const [loading,       setLoading]       = useState(false)
-  const [ready,         setReady]         = useState(false)
-  const [sessionError,  setSessionError]  = useState('')
+  const [password,    setPassword]    = useState('')
+  const [confirm,     setConfirm]     = useState('')
+  const [error,       setError]       = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [ready,       setReady]       = useState(false)
+  const [sessionError,setSessionError]= useState('')
   const navigate = useNavigate()
 
-  // The reset link can hand us the token in two different shapes
-  // depending on Supabase's configured auth flow. We check for both
-  // and explicitly establish the session ourselves, rather than relying
-  // on it happening automatically in the background.
   useEffect(() => {
-    establishSession()
-  }, [])
+    let resolved = false
 
-  async function establishSession() {
-    try {
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
-      const access_token  = hashParams.get('access_token')
-      const refresh_token = hashParams.get('refresh_token')
-
-      const searchParams = new URLSearchParams(window.location.search)
-      const code = searchParams.get('code')
-
-      if (access_token && refresh_token) {
-        const { error } = await supabase.auth.setSession({ access_token, refresh_token })
-        if (error) throw error
-      } else if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code)
-        if (error) throw error
-      } else {
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) throw new Error('No reset token found.')
-      }
-
-      // Clean the token out of the visible URL now that it's been used.
+    function markReady() {
+      if (resolved) return
+      resolved = true
+      // Remove the token from the visible URL now that we're done with it
       window.history.replaceState({}, '', '/reset-password')
       setReady(true)
-    } catch (err) {
-      setSessionError('This password reset link is invalid or has expired. Please request a new one.')
     }
-  }
+
+    // Strategy: Supabase automatically processes the recovery token from the
+    // URL hash when the page loads. We must NOT touch setSession() manually —
+    // that would double-consume the token. Instead we simply wait for Supabase
+    // to signal it's done, via the event listener or getSession().
+
+    // 1. If Supabase already processed the token before this component mounted
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) markReady()
+    })
+
+    // 2. If Supabase processes the token after this component mounted
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') markReady()
+    })
+
+    // 3. Fallback: if nothing fires after 8 seconds, the link has expired
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        setSessionError(
+          'This reset link is invalid or has expired. Please go back and request a new one.'
+        )
+      }
+    }, 8000)
+
+    return () => { subscription.unsubscribe(); clearTimeout(timeout) }
+  }, [])
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
-
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.'); return
-    }
-    if (password !== confirm) {
-      setError('Passwords do not match.'); return
-    }
+    if (password.length < 6) { setError('Password must be at least 6 characters.'); return }
+    if (password !== confirm)  { setError('Passwords do not match.'); return }
 
     setLoading(true)
     const { error } = await supabase.auth.updateUser({ password })
@@ -74,31 +71,31 @@ export default function ResetPassword() {
           <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-700 rounded-xl mb-4">
             <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
+                d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-blue-900 tracking-tight">Set your password</h1>
-          <p className="text-sm text-gray-500 mt-1">Choose a password for your account</p>
+          <p className="text-sm text-gray-500 mt-1">Choose a password for your PharmOrders account</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
-
           {sessionError ? (
             <div className="text-center">
-              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-5">
+              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-4 mb-5">
                 <p className="text-sm text-red-600">{sessionError}</p>
               </div>
-              <button
-                onClick={() => navigate('/login')}
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-              >
+              <button onClick={() => navigate('/login')}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium">
                 ← Back to sign in
               </button>
             </div>
+
           ) : !ready ? (
-            <div className="flex justify-center py-6">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
+            <div className="text-center py-6">
+              <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-blue-600 mx-auto mb-3" />
+              <p className="text-sm text-gray-400">Verifying your reset link…</p>
             </div>
+
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
@@ -128,11 +125,9 @@ export default function ResetPassword() {
                 </div>
               )}
 
-              <button
-                type="submit" disabled={loading}
+              <button type="submit" disabled={loading}
                 className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2.5 px-4
-                  rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed mt-1"
-              >
+                  rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
                 {loading ? 'Saving…' : 'Save password and continue'}
               </button>
             </form>
