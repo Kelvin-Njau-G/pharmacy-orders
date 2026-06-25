@@ -22,13 +22,16 @@ export default function ProductSearch({ value, onSelect, disabled }) {
         }
         fuseRef.current = new Fuse(products, {
           keys: ['name'],
-          threshold: 0.4,       // 0 = exact, 1 = match anything
-          ignoreLocation: true, // search the whole string, not just the start
+          threshold: 0.8,       // very lenient — tune down once working
+          ignoreLocation: true,
           minMatchCharLength: 2,
           includeScore: true,
         })
         setProductCount(products.length)
-        setStatusMsg('')   // clear — show placeholder instead
+        // Show first product name so we can verify the data looks right
+        if (products[0]) setStatusMsg(`✓ Loaded. First product: "${products[0].name}"`)
+        else setStatusMsg('⚠ Products loaded but names appear empty.')
+        setProductCount(products.length)
       })
       .catch(err => {
         setStatusMsg(`⚠ Could not load catalog: ${err.message}`)
@@ -84,7 +87,7 @@ export default function ProductSearch({ value, onSelect, disabled }) {
           ${statusMsg && statusMsg.startsWith('⚠') ? 'placeholder-amber-500' : 'placeholder-gray-400'}`}
       />
 
-      {statusMsg && statusMsg.startsWith('⚠') && (
+      {statusMsg && (
         <p className={`text-xs mt-1 ${statusColor}`}>{statusMsg}</p>
       )}
 
