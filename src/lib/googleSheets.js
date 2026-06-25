@@ -12,7 +12,7 @@ export async function fetchProducts() {
   if (_cache && _cacheTime && Date.now() - _cacheTime < CACHE_MS) return _cache
 
   const url =
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Sheet1?key=${API_KEY}`
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/SKUs?key=${API_KEY}`
 
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Google Sheets error ${res.status}`)
