@@ -260,11 +260,11 @@ export default function OrderForm() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[860px]">
+            <table className="w-full text-sm min-w-[1100px]">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   {['Product name','SKU','Unit price (KES)','Qty ordered','Avail. stock','Reason for ordering','Line total'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider first:w-56">
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider first:w-[35rem]">
                       {h}
                     </th>
                   ))}
@@ -277,7 +277,7 @@ export default function OrderForm() {
                     {/* Product name */}
                     <td className="px-4 py-3 align-top">
                       {readOnly
-                        ? <span className="font-medium text-gray-800">{it.product_name}</span>
+                        ? <span className="font-medium text-gray-800 whitespace-normal break-words">{it.product_name}</span>
                         : (
                           <>
                             <ProductSearch
