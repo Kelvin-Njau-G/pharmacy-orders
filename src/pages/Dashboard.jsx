@@ -19,12 +19,19 @@ function fmtDate(str) {
 }
 
 export default function Dashboard() {
-  const { profile } = useAuth()
+  const { profile, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { if (profile) load() }, [profile])
+  useEffect(() => {
+    if (profile) {
+      load()
+    } else if (!authLoading) {
+      // Auth finished but no profile found — stop spinner, show empty state
+      setLoading(false)
+    }
+  }, [profile, authLoading])
 
   async function load() {
     const { data } = await supabase
