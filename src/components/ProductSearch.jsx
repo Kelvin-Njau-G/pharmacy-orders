@@ -81,22 +81,22 @@ export default function ProductSearch({ value, onSelect, disabled }) {
     <div
       style={{
         position: 'fixed',
-        top:   dropPos.top,
-        left:  dropPos.left,
-        width: dropPos.width,
-        zIndex: 9999,
+        top:      dropPos.top,
+        left:     dropPos.left,
+        minWidth: Math.max(dropPos.width, 380),
+        zIndex:   9999,
       }}
-      className="bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+      className="bg-white border border-gray-200 rounded-lg shadow-xl max-h-72 overflow-y-auto"
     >
       {results.map((p, i) => (
         <button
           key={i}
           type="button"
           onMouseDown={() => pick(p)}
-          className="w-full px-3 py-2.5 text-left text-sm hover:bg-blue-50 flex items-center justify-between group"
+          className="w-full px-3 py-2.5 text-left text-sm hover:bg-blue-50 border-b border-gray-50 last:border-0"
         >
-          <span className="font-medium text-gray-800 truncate pr-2">{p.name}</span>
-          <span className="text-xs text-gray-400 group-hover:text-blue-500 shrink-0">{p.sku}</span>
+          <span className="font-medium text-gray-800 block leading-snug">{p.name}</span>
+          {p.sku && <span className="text-xs text-gray-400 mt-0.5 block">{p.sku}</span>}
         </button>
       ))}
       {query && (
