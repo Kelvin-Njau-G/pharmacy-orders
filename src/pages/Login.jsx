@@ -2,6 +2,17 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
+function AfyaNzimaIcon({ size = 56 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="20,2 37,11.5 37,28.5 20,38 3,28.5 3,11.5" fill="#E63323"/>
+      <rect x="16.5" y="10" width="7" height="19" rx="1.5" fill="white"/>
+      <rect x="10" y="16.5" width="20" height="7" rx="1.5" fill="white"/>
+      <path d="M 9 33 Q 14.5 37.5 20 36 Q 25.5 37.5 31 33" stroke="white" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
+    </svg>
+  )
+}
+
 export default function Login() {
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
@@ -25,48 +36,46 @@ export default function Login() {
       <div className="w-full max-w-sm">
 
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-700 rounded-xl mb-4">
-            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
+          <div className="flex justify-center mb-4">
+            <AfyaNzimaIcon size={64} />
           </div>
-          <h1 className="text-2xl font-bold text-blue-900 tracking-tight">PharmOrders</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to manage your orders</p>
+          <h1 className="text-2xl font-extrabold text-brand tracking-tight">AfyaNzima Orders</h1>
+          <p className="text-xs font-semibold text-gray-400 mt-1 tracking-widest uppercase">Ishi Maisha Yenye Afya</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <p className="text-sm text-gray-500 font-medium mb-5 text-center">Sign in to manage your orders</p>
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Email address</label>
+              <label className="block text-sm font-bold text-gray-700 mb-1.5">Email address</label>
               <input
                 type="email" value={email} onChange={e => setEmail(e.target.value)}
                 required autoComplete="email"
                 className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  focus:outline-none focus:ring-2 focus:ring-brand focus:border-brand"
                 placeholder="you@example.com"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+              <label className="block text-sm font-bold text-gray-700 mb-1.5">Password</label>
               <input
                 type="password" value={password} onChange={e => setPassword(e.target.value)}
                 required autoComplete="current-password"
                 className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  focus:outline-none focus:ring-2 focus:ring-brand focus:border-brand"
                 placeholder="••••••••"
               />
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                <p className="text-sm text-red-600">{error}</p>
+              <div className="bg-brand-red-light border border-red-200 rounded-lg px-4 py-3">
+                <p className="text-sm text-brand-red font-medium">{error}</p>
               </div>
             )}
 
             <button
               type="submit" disabled={loading}
-              className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2.5 px-4
+              className="w-full bg-brand hover:bg-brand-dark text-white font-bold py-2.5 px-4
                 rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed mt-1"
             >
               {loading ? 'Signing in…' : 'Sign in'}
@@ -74,7 +83,7 @@ export default function Login() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
+        <p className="text-center text-xs text-gray-400 mt-6 font-medium">
           Contact your administrator if you need help with your login.
         </p>
       </div>
