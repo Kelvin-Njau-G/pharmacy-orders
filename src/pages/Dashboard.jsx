@@ -19,15 +19,20 @@ function fmtDate(str) {
 }
 
 export default function Dashboard() {
-  const { profile, loading: authLoading } = useAuth()
+  const { profile, isAdmin, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
 
+  // Admins have no business on the staff dashboard — redirect them to their console
   useEffect(() => {
-    if (profile) load()
+    if (!authLoading && isAdmin) navigate('/admin', { replace: true })
+  }, [isAdmin, authLoading])
+
+  useEffect(() => {
+    if (profile && !isAdmin) load()
     else if (!authLoading) setLoading(false)
-  }, [profile, authLoading])
+  }, [profile, authLoading, isAdmin])
 
   async function load() {
     const { data } = await supabase
@@ -54,7 +59,8 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             {activeOrder && (
               <Link to={`/orders/${activeOrder.id}`}
-                className="text-sm text-brand hover:text-brand-dark font-bold border border-brand/30 px-3.5 py-2 rounded-lg hover:bg-brand-light transition-colors">
+                className="text-sm text-brand hover:text-brand-dark font-bold border border-brand/30
+                  px-3.5 py-2 rounded-lg hover:bg-brand-light transition-colors">
                 Continue active order →
               </Link>
             )}

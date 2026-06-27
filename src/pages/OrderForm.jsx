@@ -40,10 +40,10 @@ function fmtDateTime(str) {
 }
 
 export default function OrderForm() {
-  const { id } = useParams()
-  const isNew  = id === 'new'
+  const { id }   = useParams()
+  const isNew    = id === 'new'
   const navigate = useNavigate()
-  const { profile } = useAuth()
+  const { profile, isAdmin } = useAuth()
 
   const [order,     setOrder]     = useState(null)
   const [orderType, setOrderType] = useState('')
@@ -52,7 +52,13 @@ export default function OrderForm() {
   const [saving,    setSaving]    = useState(false)
   const [pageError, setPageError] = useState(null)
 
-  const readOnly = !!order && order.status !== 'Draft'
+  // Admins can never create new orders
+  useEffect(() => {
+    if (isAdmin && isNew) navigate('/admin', { replace: true })
+  }, [isAdmin, isNew])
+
+  // Admins view all orders as read-only
+  const readOnly = isAdmin || (!!order && order.status !== 'Draft')
 
   useEffect(() => { if (!isNew) load() }, [id])
 
@@ -71,8 +77,6 @@ export default function OrderForm() {
     setLoading(false)
   }
 
-  // ── Item helpers ─────────────────────────────────────────────────────────
-
   function addItem() {
     setItems(prev => [...prev, { ...BLANK_ITEM, _key: Date.now() }])
   }
@@ -88,7 +92,6 @@ export default function OrderForm() {
   }
 
   function onProductSelect(key, product) {
-    // Block duplicate SKUs
     if (product.sku) {
       const isDuplicate = items.some(it => it._key !== key && it.sku && it.sku === product.sku)
       if (isDuplicate) {
@@ -115,8 +118,6 @@ export default function OrderForm() {
     return items.reduce((s, it) => s + lineTotal(it), 0)
   }
 
-  // ── Validation ────────────────────────────────────────────────────────────
-
   function validate() {
     let ok = true
     setItems(prev => prev.map(it => {
@@ -129,17 +130,14 @@ export default function OrderForm() {
       if (!it.reason_for_ordering) {
         ok = false; return { ...it, _error: 'Please select a reason for ordering.' }
       }
-      // Quantity-based validation against Metabase data will be added here in Phase 2
+      // Phase 2: Metabase quantity validation slots in here
       return { ...it, _error: null }
     }))
     return ok
   }
 
-  // ── Save / Submit ─────────────────────────────────────────────────────────
-  // IMPORTANT: We always save items while the order is in Draft status.
-  // Only after items are saved do we flip the status to Submitted.
-  // This is required by the database security rules.
-
+  // Items are always saved while order is Draft.
+  // Status is only changed to Submitted as the final step.
   async function persist(newStatus) {
     if (!orderType) { setPageError('Please select an order type.'); return }
     if (!validate()) { setPageError('Please fix the errors highlighted below.'); return }
@@ -152,11 +150,11 @@ export default function OrderForm() {
     try {
       let oid = order?.id
 
-      // Step 1: Create or update order (keep as Draft for now)
+      // Step 1: create order as Draft, or update non-status fields
       if (isNew || !oid) {
         const { data: created, error } = await supabase.from('orders').insert({
           order_type:        orderType,
-          status:            'Draft',      // always start as Draft
+          status:            'Draft',
           created_by:        profile.id,
           pharmacy_location: profile.pharmacy_location,
           total_value:       total,
@@ -187,7 +185,7 @@ export default function OrderForm() {
       const { error: itemErr } = await supabase.from('order_items').insert(rows)
       if (itemErr) throw itemErr
 
-      // Step 3: Now flip the status (after items are safely saved)
+      // Step 3: Flip status now that items are saved
       const { error: statusErr } = await supabase.from('orders').update({
         status:       newStatus,
         submitted_at: newStatus === 'Submitted' ? now : null,
@@ -198,13 +196,11 @@ export default function OrderForm() {
       navigate('/dashboard')
     } catch (err) {
       setPageError('Something went wrong saving your order. Please try again.')
-      console.error(err)
+      console.error('Order save error:', err)
     } finally {
       setSaving(false)
     }
   }
-
-  // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50">
@@ -224,7 +220,8 @@ export default function OrderForm() {
         <div className="flex items-start justify-between mb-6">
           <div>
             <div className="flex items-center gap-3 mb-1">
-              <button onClick={() => navigate('/dashboard')}
+              <button
+                onClick={() => navigate(isAdmin ? '/admin' : '/dashboard')}
                 className="text-sm text-gray-400 hover:text-gray-600 font-medium transition-colors">
                 ← Back
               </button>
@@ -268,7 +265,9 @@ export default function OrderForm() {
         {/* Order items */}
         <div className="bg-white rounded-2xl border border-gray-200 mb-4">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="text-sm font-extrabold text-gray-700 uppercase tracking-wide">Order items</h2>
+            <h2 className="text-sm font-extrabold text-gray-700 uppercase tracking-wide">
+              Order items · {items.length} product{items.length !== 1 ? 's' : ''}
+            </h2>
             {!readOnly && (
               <button onClick={addItem}
                 className="text-sm text-brand hover:text-brand-dark font-bold transition-colors">
@@ -277,16 +276,27 @@ export default function OrderForm() {
             )}
           </div>
 
-          {/* Product cards */}
-          <div className="divide-y divide-gray-100">
-            {items.map(it => (
-              <div key={it._key} className="p-5">
-
-                {/* Row 1: Product name + SKU + remove */}
-                <div className="flex items-start gap-3 mb-4">
+          {/* Product cards — each product is a visually distinct box */}
+          <div className="p-4 space-y-3">
+            {items.map((it, idx) => (
+              <div key={it._key}
+                className={`rounded-xl border-2 overflow-hidden ${
+                  it._error
+                    ? 'border-amber-300'
+                    : 'border-gray-200'
+                }`}
+              >
+                {/* Card header: product number + name + SKU + remove */}
+                <div className={`px-4 py-3 flex items-start gap-3 ${
+                  it._error ? 'bg-amber-50' : 'bg-gray-50'
+                }`}>
+                  <span className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full
+                    bg-brand text-white text-xs font-extrabold mt-0.5">
+                    {idx + 1}
+                  </span>
                   <div className="flex-1 min-w-0">
                     {readOnly ? (
-                      <p className="font-bold text-gray-900 text-sm leading-snug">{it.product_name}</p>
+                      <p className="font-bold text-gray-900 text-sm leading-snug">{it.product_name || '—'}</p>
                     ) : (
                       <ProductSearch
                         value={it.product_name}
@@ -294,9 +304,11 @@ export default function OrderForm() {
                       />
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 pt-1">
+                  <div className="flex items-center gap-2 shrink-0">
                     {it.sku
-                      ? <span className="font-mono text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded font-bold">{it.sku}</span>
+                      ? <span className="font-mono text-xs bg-white border border-gray-200 text-gray-500 px-2 py-0.5 rounded font-bold">
+                          {it.sku}
+                        </span>
                       : <span className="text-xs text-gray-300 font-medium">No SKU</span>
                     }
                     {!readOnly && items.length > 1 && (
@@ -311,117 +323,123 @@ export default function OrderForm() {
                   </div>
                 </div>
 
-                {/* Row 2: Numeric fields + line total (4-col grid) */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 items-end">
+                {/* Card body: numeric fields */}
+                <div className="px-4 py-4 bg-white">
+                  {/* Row 1: Unit price | Qty | Stock | Line total */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 items-end">
+                    <div>
+                      <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">
+                        Unit price (KES)
+                      </label>
+                      {readOnly ? (
+                        <p className="text-sm font-bold text-gray-800">{fmt(it.unit_price)}</p>
+                      ) : (
+                        <input type="number" value={it.unit_price}
+                          onChange={e => setField(it._key, 'unit_price', e.target.value)}
+                          min="0" step="0.01" placeholder="0.00"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
+                            focus:outline-none focus:ring-2 focus:ring-brand text-right" />
+                      )}
+                    </div>
 
+                    <div>
+                      <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">
+                        Qty ordered
+                      </label>
+                      {readOnly ? (
+                        <p className="text-sm font-bold text-gray-800">{it.order_quantity ?? '—'}</p>
+                      ) : (
+                        <input type="number" value={it.order_quantity}
+                          onChange={e => setField(it._key, 'order_quantity', e.target.value)}
+                          min="1" step="1" placeholder="0"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
+                            focus:outline-none focus:ring-2 focus:ring-brand text-right" />
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">
+                        Avail. stock
+                      </label>
+                      {readOnly ? (
+                        <p className="text-sm font-bold text-gray-800">{it.current_available_stock ?? '—'}</p>
+                      ) : (
+                        <input type="number" value={it.current_available_stock}
+                          onChange={e => setField(it._key, 'current_available_stock', e.target.value)}
+                          min="0" step="0.1" placeholder="0"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
+                            focus:outline-none focus:ring-2 focus:ring-brand text-right" />
+                      )}
+                    </div>
+
+                    <div className="text-right">
+                      <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">
+                        Line total
+                      </label>
+                      <p className="text-base font-extrabold text-brand">{fmt(lineTotal(it))}</p>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Reason for ordering (full width) */}
                   <div>
-                    <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Unit price (KES)</label>
+                    <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">
+                      Reason for ordering
+                    </label>
                     {readOnly ? (
-                      <p className="text-sm font-bold text-gray-800">{fmt(it.unit_price)}</p>
+                      <p className="text-sm text-gray-700 font-medium">{it.reason_for_ordering || '—'}</p>
                     ) : (
-                      <input type="number" value={it.unit_price}
-                        onChange={e => setField(it._key, 'unit_price', e.target.value)}
-                        min="0" step="0.01" placeholder="0.00"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
-                          focus:outline-none focus:ring-2 focus:ring-brand text-right" />
+                      <select value={it.reason_for_ordering}
+                        onChange={e => setField(it._key, 'reason_for_ordering', e.target.value)}
+                        className="w-full sm:max-w-sm px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
+                          focus:outline-none focus:ring-2 focus:ring-brand bg-white">
+                        <option value="">Select reason…</option>
+                        {REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
                     )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Qty ordered</label>
-                    {readOnly ? (
-                      <p className="text-sm font-bold text-gray-800">{it.order_quantity ?? '—'}</p>
-                    ) : (
-                      <input type="number" value={it.order_quantity}
-                        onChange={e => setField(it._key, 'order_quantity', e.target.value)}
-                        min="1" step="1" placeholder="0"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
-                          focus:outline-none focus:ring-2 focus:ring-brand text-right" />
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Avail. stock</label>
-                    {readOnly ? (
-                      <p className="text-sm font-bold text-gray-800">{it.current_available_stock ?? '—'}</p>
-                    ) : (
-                      <input type="number" value={it.current_available_stock}
-                        onChange={e => setField(it._key, 'current_available_stock', e.target.value)}
-                        min="0" step="0.1" placeholder="0"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
-                          focus:outline-none focus:ring-2 focus:ring-brand text-right" />
-                    )}
-                  </div>
-
-                  <div className="text-right">
-                    <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Line total</label>
-                    <p className="text-base font-extrabold text-gray-900">{fmt(lineTotal(it))}</p>
-                  </div>
-                </div>
-
-                {/* Row 3: Reason for ordering (full width) */}
-                <div>
-                  <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Reason for ordering</label>
-                  {readOnly ? (
-                    <p className="text-sm text-gray-700 font-medium">{it.reason_for_ordering || '—'}</p>
-                  ) : (
-                    <select value={it.reason_for_ordering}
-                      onChange={e => setField(it._key, 'reason_for_ordering', e.target.value)}
-                      className="w-full sm:max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
-                        focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-                      <option value="">Select reason…</option>
-                      {REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
+                  {/* Validation feedback — Phase 2 Metabase checks will also populate this */}
+                  {it._error && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3
+                      flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-2">
+                        <svg className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" fill="none"
+                          stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                        </svg>
+                        <p className="text-sm text-amber-800 font-medium">{it._error}</p>
+                      </div>
+                      <button onClick={() => removeItem(it._key)}
+                        className="text-xs font-bold text-brand-red hover:text-brand-red-dark
+                          border border-red-200 hover:border-red-300 bg-white px-3 py-1.5
+                          rounded-lg transition-colors shrink-0">
+                        Remove
+                      </button>
+                    </div>
                   )}
                 </div>
-
-                {/* Validation feedback (Phase 2: Metabase-based checks slot in here) */}
-                {it._error && (
-                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-2">
-                      <svg className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                      </svg>
-                      <p className="text-sm text-amber-800 font-medium">{it._error}</p>
-                    </div>
-                    <button onClick={() => removeItem(it._key)}
-                      className="text-xs font-bold text-brand-red hover:text-brand-red-dark border border-red-200
-                        hover:border-red-300 bg-white px-3 py-1.5 rounded-lg transition-colors shrink-0">
-                      Remove product
-                    </button>
-                  </div>
-                )}
               </div>
             ))}
           </div>
 
-          {/* Add product button at the bottom (also accessible after long lists) */}
-          {!readOnly && (
-            <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between">
+          {/* Bottom bar: add product + grand total */}
+          <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between">
+            {!readOnly ? (
               <button onClick={addItem}
-                className="text-sm text-brand hover:text-brand-dark font-bold transition-colors flex items-center gap-1.5">
+                className="text-sm text-brand hover:text-brand-dark font-bold transition-colors
+                  flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
                 Add another product
               </button>
-              <div className="text-right">
-                <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
-                <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
-              </div>
+            ) : <div />}
+            <div className="text-right">
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
+              <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
             </div>
-          )}
-
-          {/* Grand total (read-only) */}
-          {readOnly && (
-            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end">
-              <div className="text-right">
-                <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
-                <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Action buttons */}
@@ -451,7 +469,9 @@ export default function OrderForm() {
           }`}>
             {order?.status === 'Processed'
               ? 'This order has been processed and archived.'
-              : 'This order has been submitted and is awaiting processing by the admin.'}
+              : isAdmin
+                ? 'This order is pending processing. Use the Admin console to mark it as processed.'
+                : 'This order has been submitted and is awaiting processing by the admin.'}
           </div>
         )}
       </div>
