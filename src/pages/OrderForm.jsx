@@ -21,9 +21,7 @@ const REASONS = [
 const BLANK_ITEM = {
   product_name: '', sku: '', unit_price: '',
   order_quantity: '', current_available_stock: '', reason_for_ordering: '',
-  _error: null,
-  _hmisVariance: null,     // { staffStock, hmisStock, variancePct } | null
-  _hmisConfirmed: false,   // staff confirmed variance
+  _error: null, _hmisVariance: null, _hmisConfirmed: false,
 }
 
 function fmt(n) {
@@ -31,13 +29,20 @@ function fmt(n) {
   if (isNaN(v)) return '—'
   return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES', minimumFractionDigits:0 }).format(v)
 }
-
 function fmtDateTime(str) {
   if (!str) return '—'
-  return new Date(str).toLocaleString('en-KE', {
-    day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit',
-  })
+  return new Date(str).toLocaleString('en-KE', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
 }
+
+// Drag handle icon
+const DragHandle = () => (
+  <svg className="w-4 h-4 text-gray-300 group-hover:text-gray-400 transition-colors"
+    fill="currentColor" viewBox="0 0 20 20">
+    <circle cx="7" cy="5"  r="1.5"/><circle cx="13" cy="5"  r="1.5"/>
+    <circle cx="7" cy="10" r="1.5"/><circle cx="13" cy="10" r="1.5"/>
+    <circle cx="7" cy="15" r="1.5"/><circle cx="13" cy="15" r="1.5"/>
+  </svg>
+)
 
 export default function OrderForm() {
   const { id }   = useParams()
@@ -52,28 +57,26 @@ export default function OrderForm() {
   const [saving,    setSaving]    = useState(false)
   const [pageError, setPageError] = useState(null)
 
-  // Validation data from Metabase (via /api/validation)
+  // Validation data
   const [validationData,    setValidationData]    = useState(null)
   const [stockSettings,     setStockSettings]     = useState(null)
   const [facilityBudget,    setFacilityBudget]    = useState(2000)
   const [validationLoading, setValidationLoading] = useState(false)
   const [validationError,   setValidationError]   = useState(null)
 
-  // Admins cannot create orders
-  useEffect(() => {
-    if (isAdmin && isNew) navigate('/admin', { replace: true })
-  }, [isAdmin, isNew])
+  // Drag-and-drop state
+  const [dragKey,     setDragKey]     = useState(null)
+  const [dragOverKey, setDragOverKey] = useState(null)
+
+  useEffect(() => { if (isAdmin && isNew) navigate('/admin', { replace: true }) }, [isAdmin, isNew])
 
   const readOnly = isAdmin || (!!order && order.status !== 'Draft')
 
   useEffect(() => { if (!isNew) load() }, [id])
 
-  // Fetch Metabase validation data + Supabase settings once the order is ready
   useEffect(() => {
     if (!profile || readOnly) return
-    if (isNew || (order && order.status === 'Draft')) {
-      loadValidation()
-    }
+    if (isNew || (order && order.status === 'Draft')) loadValidation()
   }, [profile, order?.id, readOnly])
 
   async function load() {
@@ -85,8 +88,7 @@ export default function OrderForm() {
     setItems(
       data.order_items.length > 0
         ? data.order_items.map((it, i) => ({
-            ...it, _key: i, _error: null,
-            _hmisVariance: null,
+            ...it, _key: i, _error: null, _hmisVariance: null,
             _hmisConfirmed: it.hmis_variance_confirmed || false,
           }))
         : [{ ...BLANK_ITEM, _key: 1 }]
@@ -95,53 +97,59 @@ export default function OrderForm() {
   }
 
   async function loadValidation() {
-    setValidationLoading(true)
-    setValidationError(null)
+    setValidationLoading(true); setValidationError(null)
     try {
       const [settingsRes, facilityRes, validationRes] = await Promise.all([
         supabase.from('stock_settings').select('*').limit(1).single(),
-        supabase.from('facilities').select('discretionary_budget').eq('name', profile.pharmacy_location).single(),
+        supabase.from('facilities').select('discretionary_budget')
+          .eq('name', profile.pharmacy_location).single(),
         fetch(`/api/validation?facility=${encodeURIComponent(profile.pharmacy_location)}`).then(r => r.json()),
       ])
-      if (settingsRes.data)     setStockSettings(settingsRes.data)
-      if (facilityRes.data)     setFacilityBudget(facilityRes.data.discretionary_budget ?? 2000)
-      if (validationRes.items)  setValidationData(validationRes.items)
-      if (validationRes.error)  setValidationError(validationRes.error)
+      if (settingsRes.data)    setStockSettings(settingsRes.data)
+      if (facilityRes.data)    setFacilityBudget(facilityRes.data.discretionary_budget ?? 2000)
+      if (validationRes.items) setValidationData(validationRes.items)
+      if (validationRes.error) setValidationError(validationRes.error)
     } catch {
-      setValidationError('Could not load validation data. You may still place orders.')
-    } finally {
-      setValidationLoading(false)
-    }
+      setValidationError('Could not load validation data. Quantity limits will not be enforced.')
+    } finally { setValidationLoading(false) }
   }
 
-  // ── Max qty calculation for one item ────────────────────────────────────────
-  const getMaxQty = useCallback((it, overrideQty) => {
+  // ── Budget-aware max qty — only items BEFORE this one in the list consume budget ──
+  // This is called with the current items array so it always uses up-to-date positions.
+  function calcMaxQtyInContext(it, allItems, idxOverride) {
     if (!validationData || !stockSettings || !it.sku) return { maxQty: Infinity, limitReason: null }
-    const otherDiscretionarySpend = items
-      .filter(other =>
-        other._key !== it._key &&
-        (other.reason_for_ordering === 'Pharmtech/Clinician Request' || other.reason_for_ordering === 'Specific Brand')
-      )
-      .reduce((sum, other) => sum + (parseFloat(other.unit_price)||0) * (parseInt(other.order_quantity)||0), 0)
-
+    const idx = idxOverride ?? allItems.findIndex(i => i._key === it._key)
+    const otherDiscretionarySpend = allItems
+      .slice(0, idx)   // only items that appear BEFORE this one
+      .filter(o => o.reason_for_ordering === 'Pharmtech/Clinician Request' || o.reason_for_ordering === 'Specific Brand')
+      .reduce((s, o) => s + (parseFloat(o.unit_price)||0)*(parseInt(o.order_quantity)||0), 0)
     return calculateMaxQty({
-      sku: it.sku,
-      reason: it.reason_for_ordering,
-      unitPrice: it.unit_price,
-      validationData,
-      settings: stockSettings,
-      facilityBudget,
-      otherDiscretionarySpend,
+      sku: it.sku, reason: it.reason_for_ordering, unitPrice: it.unit_price,
+      validationData, settings: stockSettings, facilityBudget, otherDiscretionarySpend,
     })
-  }, [validationData, stockSettings, facilityBudget, items])
+  }
+
+  // Re-validate every discretionary item after any order change
+  function revalidateDiscretionary(updatedItems) {
+    return updatedItems.map((it, idx) => {
+      if (!it.sku || !validationData || !stockSettings) return it
+      if (it.reason_for_ordering !== 'Pharmtech/Clinician Request' && it.reason_for_ordering !== 'Specific Brand') return it
+      const { maxQty, limitReason } = calcMaxQtyInContext(it, updatedItems, idx)
+      const qty = parseInt(it.order_quantity) || 0
+      let error = null
+      if (maxQty === 0) error = limitReason
+      else if (qty > 0 && qty > maxQty) error = `Maximum approved quantity is ${maxQty} units. Please reduce to ${maxQty} or remove this product.`
+      return { ...it, _error: error }
+    })
+  }
+
+  // Readable alias for render
+  const getMaxQty = useCallback((it) => calcMaxQtyInContext(it, items), [validationData, stockSettings, facilityBudget, items])
 
   // ── Item helpers ─────────────────────────────────────────────────────────────
-  function addItem() {
-    setItems(prev => [...prev, { ...BLANK_ITEM, _key: Date.now() }])
-  }
-
+  function addItem() { setItems(prev => [...prev, { ...BLANK_ITEM, _key: Date.now() }]) }
   function removeItem(key) {
-    setItems(prev => prev.filter(it => it._key !== key))
+    setItems(prev => revalidateDiscretionary(prev.filter(it => it._key !== key)))
   }
 
   function onProductSelect(key, product) {
@@ -161,60 +169,36 @@ export default function OrderForm() {
     ))
   }
 
-  // Real-time quantity validation
   function handleQtyChange(key, value) {
     setItems(prev => {
-      const updated = prev.map(it => it._key === key ? { ...it, order_quantity: value } : it)
-      const it = updated.find(i => i._key === key)
-      const qty = parseInt(value) || 0
-      const { maxQty, limitReason } = calculateMaxQty({
-        sku: it.sku, reason: it.reason_for_ordering, unitPrice: it.unit_price,
-        validationData, settings: stockSettings, facilityBudget,
-        otherDiscretionarySpend: updated
-          .filter(o => o._key !== key && (o.reason_for_ordering === 'Pharmtech/Clinician Request' || o.reason_for_ordering === 'Specific Brand'))
-          .reduce((s, o) => s + (parseFloat(o.unit_price)||0)*(parseInt(o.order_quantity)||0), 0),
-      })
+      const base = prev.map(it => it._key === key ? { ...it, order_quantity: value } : it)
+      const idx  = base.findIndex(i => i._key === key)
+      const it   = base[idx]
+      const qty  = parseInt(value) || 0
+      const { maxQty, limitReason } = calcMaxQtyInContext(it, base, idx)
       let error = null
       if (maxQty === 0) error = limitReason || 'This item cannot be ordered at this time.'
       else if (qty > 0 && qty > maxQty) error = `Maximum approved quantity is ${maxQty} units. Please reduce to ${maxQty} or remove this product.`
-      return updated.map(it => it._key === key ? { ...it, _error: error } : it)
+      const updated = base.map(i => i._key === key ? { ...i, _error: error } : i)
+      return revalidateDiscretionary(updated)
     })
   }
 
-  // Real-time HMIS variance check
   function handleStockChange(key, value) {
     setItems(prev => prev.map(it => {
       if (it._key !== key) return it
       const hmisStock = validationData?.[it.sku]?.hmisStock
-      const variance  = checkHmisVariance(value, hmisStock)
-      return { ...it, current_available_stock: value, _hmisVariance: variance, _hmisConfirmed: false }
+      return { ...it, current_available_stock: value, _hmisVariance: checkHmisVariance(value, hmisStock), _hmisConfirmed: false }
     }))
   }
 
-  // Reason change: revalidate max qty with new reason
   function handleReasonChange(key, value) {
     setItems(prev => {
-      const updated = prev.map(it => it._key === key ? { ...it, reason_for_ordering: value, _error: null } : it)
-      const it = updated.find(i => i._key === key)
-      const qty = parseInt(it.order_quantity) || 0
-      if (it.sku && qty > 0 && validationData && stockSettings) {
-        const { maxQty, limitReason } = calculateMaxQty({
-          sku: it.sku, reason: value, unitPrice: it.unit_price,
-          validationData, settings: stockSettings, facilityBudget,
-          otherDiscretionarySpend: updated
-            .filter(o => o._key !== key && (o.reason_for_ordering === 'Pharmtech/Clinician Request' || o.reason_for_ordering === 'Specific Brand'))
-            .reduce((s, o) => s + (parseFloat(o.unit_price)||0)*(parseInt(o.order_quantity)||0), 0),
-        })
-        let error = null
-        if (maxQty === 0) error = limitReason
-        else if (qty > maxQty) error = `Maximum approved quantity is ${maxQty} units. Please reduce to ${maxQty} or remove this product.`
-        return updated.map(i => i._key === key ? { ...i, _error: error } : i)
-      }
-      return updated
+      const base = prev.map(it => it._key === key ? { ...it, reason_for_ordering: value, _error: null } : it)
+      return revalidateDiscretionary(base)
     })
   }
 
-  // HMIS variance confirmation
   function confirmVariance(key, useSystemValue) {
     setItems(prev => prev.map(it => {
       if (it._key !== key) return it
@@ -225,57 +209,63 @@ export default function OrderForm() {
     }))
   }
 
+  // ── Drag-and-drop ─────────────────────────────────────────────────────────────
+  function onDragStart(e, key) {
+    setDragKey(key)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  function onDragOver(e, key) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverKey(key)
+  }
+  function onDrop(e, targetKey) {
+    e.preventDefault()
+    if (!dragKey || dragKey === targetKey) { endDrag(); return }
+    setItems(prev => {
+      const from = prev.findIndex(i => i._key === dragKey)
+      const to   = prev.findIndex(i => i._key === targetKey)
+      const reordered = [...prev]
+      const [moved] = reordered.splice(from, 1)
+      reordered.splice(to, 0, moved)
+      return revalidateDiscretionary(reordered)
+    })
+    endDrag()
+  }
+  function endDrag() { setDragKey(null); setDragOverKey(null) }
+
+  // ── Totals ───────────────────────────────────────────────────────────────────
   function lineTotal(it) { return (parseFloat(it.unit_price)||0) * (parseInt(it.order_quantity)||0) }
   function grandTotal()  { return items.reduce((s, it) => s + lineTotal(it), 0) }
 
-  // ── Validation before save/submit ────────────────────────────────────────────
+  // ── Validate before save/submit ───────────────────────────────────────────────
   function validate() {
     let ok = true
-    setItems(prev => prev.map(it => {
-      if (!it.product_name.trim()) {
-        ok = false; return { ...it, _error: 'Product name is required.' }
-      }
-      if (!it.order_quantity || parseInt(it.order_quantity) < 1) {
-        ok = false; return { ...it, _error: 'Order quantity must be at least 1.' }
-      }
-      if (!it.reason_for_ordering) {
-        ok = false; return { ...it, _error: 'Please select a reason for ordering.' }
-      }
-
-      // Max quantity check
-      const qty = parseInt(it.order_quantity) || 0
+    setItems(prev => prev.map((it, idx) => {
+      if (!it.product_name.trim()) { ok = false; return { ...it, _error: 'Product name is required.' } }
+      if (!it.order_quantity || parseInt(it.order_quantity) < 1) { ok = false; return { ...it, _error: 'Order quantity must be at least 1.' } }
+      if (!it.reason_for_ordering) { ok = false; return { ...it, _error: 'Please select a reason for ordering.' } }
       if (it.sku && validationData && stockSettings) {
-        const { maxQty, limitReason } = getMaxQty(it)
-        if (maxQty === 0) {
-          ok = false; return { ...it, _error: limitReason || 'This item cannot be ordered.' }
-        }
-        if (qty > maxQty) {
-          ok = false; return { ...it, _error: `Maximum approved quantity is ${maxQty} units.` }
-        }
+        const { maxQty, limitReason } = calcMaxQtyInContext(it, prev, idx)
+        const qty = parseInt(it.order_quantity) || 0
+        if (maxQty === 0) { ok = false; return { ...it, _error: limitReason || 'This item cannot be ordered.' } }
+        if (qty > maxQty) { ok = false; return { ...it, _error: `Maximum approved quantity is ${maxQty} units.` } }
       }
-
-      // HMIS variance must be confirmed
-      if (it._hmisVariance && !it._hmisConfirmed) {
-        ok = false; return { ...it, _error: 'Please confirm your stock count (or use the system value) to continue.' }
-      }
-
+      if (it._hmisVariance && !it._hmisConfirmed) { ok = false; return { ...it, _error: 'Please confirm your available stock quantity (or use the system value) to continue.' } }
       return { ...it, _error: null }
     }))
     return ok
   }
 
-  // ── Save / Submit ─────────────────────────────────────────────────────────────
+  // ── Persist ───────────────────────────────────────────────────────────────────
   async function persist(newStatus) {
     if (!orderType) { setPageError('Please select an order type.'); return }
     if (!validate()) { setPageError('Please fix the highlighted errors below.'); return }
     setPageError(null); setSaving(true)
-
-    const now   = new Date().toISOString()
+    const now = new Date().toISOString()
     const total = grandTotal()
-
     try {
       let oid = order?.id
-
       if (isNew || !oid) {
         const { data: created, error } = await supabase.from('orders').insert({
           order_type: orderType, status: 'Draft',
@@ -288,7 +278,6 @@ export default function OrderForm() {
         const { error } = await supabase.from('orders').update({ order_type: orderType, total_value: total }).eq('id', oid)
         if (error) throw error
       }
-
       await supabase.from('order_items').delete().eq('order_id', oid)
       const rows = items.map(it => ({
         order_id:                oid,
@@ -303,22 +292,17 @@ export default function OrderForm() {
       }))
       const { error: itemErr } = await supabase.from('order_items').insert(rows)
       if (itemErr) throw itemErr
-
       const { error: statusErr } = await supabase.from('orders').update({
         status: newStatus, submitted_at: newStatus === 'Submitted' ? now : null, total_value: total,
       }).eq('id', oid)
       if (statusErr) throw statusErr
-
       navigate('/dashboard')
     } catch (err) {
       setPageError('Something went wrong. Please try again.')
       console.error('[OrderForm persist]', err)
-    } finally {
-      setSaving(false)
-    }
+    } finally { setSaving(false) }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="min-h-screen bg-gray-50"><Navbar />
       <div className="flex justify-center py-24"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand" /></div>
@@ -348,7 +332,6 @@ export default function OrderForm() {
               </div>
             )}
           </div>
-          {/* Validation loading indicator */}
           {validationLoading && !readOnly && (
             <div className="flex items-center gap-2 text-xs text-gray-400 font-medium">
               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-brand" />
@@ -362,30 +345,34 @@ export default function OrderForm() {
         )}
         {validationError && !readOnly && (
           <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium">
-            ⚠ {validationError} Quantity limits will not be enforced.
+            ⚠ {validationError}
           </div>
         )}
 
         {/* Order type */}
         <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
           <label className="block text-sm font-bold text-gray-700 mb-2">Order type</label>
-          {readOnly ? (
-            <p className="text-sm font-semibold text-gray-800">{orderType}</p>
-          ) : (
-            <select value={orderType} onChange={e => setOrderType(e.target.value)}
-              className="px-3.5 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-              <option value="">Select order type…</option>
-              {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-          )}
+          {readOnly
+            ? <p className="text-sm font-semibold text-gray-800">{orderType}</p>
+            : <select value={orderType} onChange={e => setOrderType(e.target.value)}
+                className="px-3.5 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
+                <option value="">Select order type…</option>
+                {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+          }
         </div>
 
         {/* Items */}
         <div className="bg-white rounded-2xl border border-gray-200 mb-4">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="text-sm font-extrabold text-gray-700 uppercase tracking-wide">
-              Order items · {items.length} product{items.length !== 1 ? 's' : ''}
-            </h2>
+            <div>
+              <h2 className="text-sm font-extrabold text-gray-700 uppercase tracking-wide">
+                Order items · {items.length} product{items.length !== 1 ? 's' : ''}
+              </h2>
+              {!readOnly && items.length > 1 && (
+                <p className="text-xs text-gray-400 mt-0.5 font-medium">Drag ⠿ to reorder — position controls discretionary budget priority</p>
+              )}
+            </div>
             {!readOnly && (
               <button onClick={addItem} className="text-sm text-brand hover:text-brand-dark font-bold">+ Add product</button>
             )}
@@ -395,21 +382,49 @@ export default function OrderForm() {
             {items.map((it, idx) => {
               const maxQtyInfo = (!readOnly && it.sku && validationData && stockSettings)
                 ? getMaxQty(it) : { maxQty: Infinity, limitReason: null }
+              const isDragging  = dragKey     === it._key
+              const isDragOver  = dragOverKey === it._key && !isDragging
 
               return (
-                <div key={it._key} className={`rounded-xl border-2 overflow-hidden ${it._error ? 'border-amber-300' : 'border-gray-200'}`}>
-
+                <div key={it._key}
+                  onDragOver={!readOnly ? e => onDragOver(e, it._key) : undefined}
+                  onDrop={!readOnly ? e => onDrop(e, it._key) : undefined}
+                  className={`rounded-xl border-2 overflow-hidden transition-all ${
+                    isDragging  ? 'opacity-40 scale-[0.99]' :
+                    isDragOver  ? 'border-brand shadow-md shadow-brand/10' :
+                    it._error   ? 'border-amber-300' : 'border-gray-200'
+                  }`}
+                >
                   {/* Card header */}
-                  <div className={`px-4 py-3 flex items-start gap-3 ${it._error ? 'bg-amber-50' : 'bg-gray-50'}`}>
+                  <div className={`px-4 py-3 flex items-start gap-2 ${it._error ? 'bg-amber-50' : 'bg-gray-50'}`}>
+
+                    {/* Drag handle */}
+                    {!readOnly && (
+                      <div
+                        draggable
+                        onDragStart={e => onDragStart(e, it._key)}
+                        onDragEnd={endDrag}
+                        className="group cursor-grab active:cursor-grabbing shrink-0 mt-1.5 px-0.5"
+                        title="Drag to reorder"
+                      >
+                        <DragHandle />
+                      </div>
+                    )}
+
+                    {/* Product number badge */}
                     <span className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-brand text-white text-xs font-extrabold mt-0.5">
                       {idx + 1}
                     </span>
+
+                    {/* Product search / name */}
                     <div className="flex-1 min-w-0">
                       {readOnly
-                        ? <p className="font-bold text-gray-900 text-sm leading-snug">{it.product_name || '—'}</p>
+                        ? <p className="font-bold text-gray-900 text-sm">{it.product_name || '—'}</p>
                         : <ProductSearch value={it.product_name} onSelect={p => onProductSelect(it._key, p)} />
                       }
                     </div>
+
+                    {/* SKU badge + remove */}
                     <div className="flex items-center gap-2 shrink-0">
                       {it.sku
                         ? <span className="font-mono text-xs bg-white border border-gray-200 text-gray-500 px-2 py-0.5 rounded font-bold">{it.sku}</span>
@@ -428,7 +443,6 @@ export default function OrderForm() {
 
                   {/* Card body */}
                   <div className="px-4 py-4 bg-white">
-                    {/* Row 1: numeric fields */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 items-start">
 
                       {/* Unit price */}
@@ -453,13 +467,13 @@ export default function OrderForm() {
                                 onChange={e => handleQtyChange(it._key, e.target.value)}
                                 min="1" step="1" placeholder="0"
                                 className={`w-full px-3 py-2 border rounded-lg text-sm font-medium focus:outline-none focus:ring-2 text-right ${
-                                  it._error && it._error.includes('Maximum') ? 'border-amber-400 focus:ring-amber-400' : 'border-gray-300 focus:ring-brand'
+                                  it._error?.includes('Maximum') ? 'border-amber-400 focus:ring-amber-400' : 'border-gray-300 focus:ring-brand'
                                 }`} />
                               {maxQtyInfo.maxQty !== Infinity && maxQtyInfo.maxQty > 0 && (
                                 <p className="text-xs text-gray-400 mt-1 font-medium">Max: {maxQtyInfo.maxQty} units</p>
                               )}
                               {maxQtyInfo.limitReason && maxQtyInfo.maxQty > 0 && (
-                                <p className="text-xs text-brand-navy mt-0.5 font-medium">{maxQtyInfo.limitReason}</p>
+                                <p className="text-xs text-gray-500 mt-0.5 font-medium leading-tight">{maxQtyInfo.limitReason}</p>
                               )}
                             </>
                         }
@@ -477,13 +491,12 @@ export default function OrderForm() {
                                 className={`w-full px-3 py-2 border rounded-lg text-sm font-medium focus:outline-none focus:ring-2 text-right ${
                                   it._hmisVariance && !it._hmisConfirmed ? 'border-amber-400 focus:ring-amber-400' : 'border-gray-300 focus:ring-brand'
                                 }`} />
-                              {/* HMIS variance alert */}
                               {it._hmisVariance && !it._hmisConfirmed && (
                                 <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
                                   <p className="text-xs text-amber-800 font-semibold mb-2">
                                     System (HMIS) shows <strong>{it._hmisVariance.hmisStock}</strong> units.{' '}
                                     {it._hmisVariance.variancePct !== null
-                                      ? `Your entry differs by ${Math.round(Math.abs(it._hmisVariance.variancePct * 100))}%.`
+                                      ? `${Math.round(Math.abs(it._hmisVariance.variancePct * 100))}% difference from your entry.`
                                       : 'System shows 0 but you entered stock.'
                                     } Please confirm.
                                   </p>
@@ -500,9 +513,7 @@ export default function OrderForm() {
                                 </div>
                               )}
                               {it._hmisVariance && it._hmisConfirmed && (
-                                <p className="text-xs text-amber-600 mt-1 font-semibold">
-                                  ⚠ Variance confirmed — will be flagged for review
-                                </p>
+                                <p className="text-xs text-amber-600 mt-1 font-semibold">⚠ Variance confirmed — flagged for review</p>
                               )}
                             </>
                         }
@@ -515,7 +526,7 @@ export default function OrderForm() {
                       </div>
                     </div>
 
-                    {/* Row 2: Reason */}
+                    {/* Reason */}
                     <div>
                       <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Reason for ordering</label>
                       {readOnly
@@ -540,7 +551,7 @@ export default function OrderForm() {
                           <p className="text-sm text-amber-800 font-medium">{it._error}</p>
                         </div>
                         <button onClick={() => removeItem(it._key)}
-                          className="text-xs font-bold text-brand-red hover:text-brand-red-dark border border-red-200 bg-white px-3 py-1.5 rounded-lg shrink-0">
+                          className="text-xs font-bold text-brand-red border border-red-200 bg-white px-3 py-1.5 rounded-lg shrink-0">
                           Remove
                         </button>
                       </div>
@@ -553,15 +564,15 @@ export default function OrderForm() {
 
           {/* Bottom bar */}
           <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between">
-            {!readOnly ? (
-              <button onClick={addItem}
-                className="text-sm text-brand hover:text-brand-dark font-bold flex items-center gap-1.5">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add another product
-              </button>
-            ) : <div />}
+            {!readOnly
+              ? <button onClick={addItem} className="text-sm text-brand hover:text-brand-dark font-bold flex items-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add another product
+                </button>
+              : <div />
+            }
             <div className="text-right">
               <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
               <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
@@ -569,36 +580,35 @@ export default function OrderForm() {
           </div>
         </div>
 
-        {/* Action buttons */}
-        {!readOnly ? (
-          <div className="flex gap-3 justify-end">
-            <button onClick={() => navigate('/dashboard')}
-              className="px-4 py-2.5 text-sm font-bold text-gray-600 border border-gray-300 rounded-lg hover:border-gray-400">
-              Discard
-            </button>
-            <button onClick={() => persist('Draft')} disabled={saving}
-              className="px-4 py-2.5 text-sm font-bold bg-white text-brand border border-brand/30 rounded-lg hover:bg-brand-light disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save as draft'}
-            </button>
-            <button onClick={() => persist('Submitted')} disabled={saving}
-              className="px-4 py-2.5 text-sm font-bold bg-brand text-white rounded-lg hover:bg-brand-dark disabled:opacity-50">
-              {saving ? 'Submitting…' : 'Submit order'}
-            </button>
-          </div>
-        ) : (
-          <div className={`text-center py-4 text-sm font-semibold rounded-xl border ${
-            order?.status === 'Processed'
-              ? 'bg-green-50 border-green-200 text-green-700'
-              : 'bg-brand-light border-brand/20 text-brand'
-          }`}>
-            {order?.status === 'Processed'
-              ? 'This order has been processed and archived.'
-              : isAdmin
-                ? 'This order is pending processing. Use the Admin console to mark it as processed.'
-                : 'This order has been submitted and is awaiting processing by the admin.'
-            }
-          </div>
-        )}
+        {/* Actions */}
+        {!readOnly
+          ? <div className="flex gap-3 justify-end">
+              <button onClick={() => navigate('/dashboard')}
+                className="px-4 py-2.5 text-sm font-bold text-gray-600 border border-gray-300 rounded-lg hover:border-gray-400">
+                Discard
+              </button>
+              <button onClick={() => persist('Draft')} disabled={saving}
+                className="px-4 py-2.5 text-sm font-bold bg-white text-brand border border-brand/30 rounded-lg hover:bg-brand-light disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save as draft'}
+              </button>
+              <button onClick={() => persist('Submitted')} disabled={saving}
+                className="px-4 py-2.5 text-sm font-bold bg-brand text-white rounded-lg hover:bg-brand-dark disabled:opacity-50">
+                {saving ? 'Submitting…' : 'Submit order'}
+              </button>
+            </div>
+          : <div className={`text-center py-4 text-sm font-semibold rounded-xl border ${
+              order?.status === 'Processed'
+                ? 'bg-green-50 border-green-200 text-green-700'
+                : 'bg-brand-light border-brand/20 text-brand'
+            }`}>
+              {order?.status === 'Processed'
+                ? 'This order has been processed and archived.'
+                : isAdmin
+                  ? 'This order is pending processing. Use the Admin console to mark it as processed.'
+                  : 'This order has been submitted and is awaiting processing by the admin.'
+              }
+            </div>
+        }
       </div>
     </div>
   )
