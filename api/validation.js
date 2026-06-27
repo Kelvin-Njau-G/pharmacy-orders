@@ -26,7 +26,15 @@ async function runQuestionRaw(cardId, token) {
   const r = await fetch(`${METABASE_URL}/api/card/${cardId}/query`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
-    body:    JSON.stringify({}),
+    body: JSON.stringify({
+      // Override Metabase's default 10,000-row limit.
+      // Demand planning (Q2689) has 6+ facilities × ~1,600 SKUs = ~10,000+ rows
+      // which causes Well Living's data to be silently truncated at the default limit.
+      constraints: {
+        'max-results':          50000,
+        'max-results-bare-rows': 50000,
+      },
+    }),
   })
   if (!r.ok) throw new Error(`Card ${cardId} failed: ${r.status}`)
   return r.json()
