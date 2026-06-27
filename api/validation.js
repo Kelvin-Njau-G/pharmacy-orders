@@ -1,66 +1,83 @@
 // Vercel serverless function — secure Metabase proxy
-// Runs on the server; Metabase credentials are never sent to the browser.
-// Called from the order form as: GET /api/validation?facility=Well+Living+Medical+Clinic
+// GET /api/validation?facility=Well+Living+Medical+Clinic
+// GET /api/validation?facility=...&debug=true   ← shows raw column names
 
 const METABASE_URL   = process.env.METABASE_URL
 const METABASE_EMAIL = process.env.METABASE_EMAIL
 const METABASE_PASS  = process.env.METABASE_PASSWORD
 
-const QID_INVENTORY = 2501  // Pharmacy Inventory  → HMIS stock per facility/SKU
-const QID_DEMAND    = 2689  // Demand Planning     → ABC class, total demand
-const QID_SALES     = 2799  // Sales since restock → sales qty, days since restock
+const QID_INVENTORY = 2501  // Pharmacy Inventory → HMIS stock per facility/SKU
+const QID_DEMAND    = 2689  // Demand Planning    → ABC class, total demand
+const QID_SALES     = 2799  // Sales since restock → sales qty, last restock date
 
-// Authenticate and get a session token
 async function getToken() {
   const r = await fetch(`${METABASE_URL}/api/session`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ username: METABASE_EMAIL, password: METABASE_PASS }),
   })
-  if (!r.ok) throw new Error(`Metabase auth ${r.status}`)
+  if (!r.ok) throw new Error(`Metabase auth failed: ${r.status}`)
   const { id } = await r.json()
   return id
 }
 
-// Run a saved question and return rows as an array of objects
-async function runQuestion(id, token) {
-  const r = await fetch(`${METABASE_URL}/api/card/${id}/query`, {
+// Returns raw Metabase query response (for debug and for dual-key processing)
+async function runQuestionRaw(cardId, token) {
+  const r = await fetch(`${METABASE_URL}/api/card/${cardId}/query`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
     body:    JSON.stringify({}),
   })
-  if (!r.ok) throw new Error(`Question ${id} failed ${r.status}`)
-  const json = await r.json()
-  const cols = (json.data?.cols || []).map(c => c.display_name || c.name)
-  return (json.data?.rows || []).map(row => {
+  if (!r.ok) throw new Error(`Card ${cardId} failed: ${r.status}`)
+  return r.json()
+}
+
+// Convert Metabase cols/rows to array of objects.
+// Stores each value under BOTH the field name (c.name) and the display name
+// (c.display_name) so pick() can find columns regardless of which format Metabase uses.
+function toRows(json) {
+  const cols = json.data?.cols || []
+  const rows = json.data?.rows || []
+  return rows.map(row => {
     const obj = {}
-    cols.forEach((col, i) => { obj[col] = row[i] })
+    cols.forEach((col, i) => {
+      const val = row[i]
+      if (col.name)         obj[col.name]         = val
+      if (col.display_name) obj[col.display_name]  = val
+      // Also store a fully-normalised key (no spaces/underscores, lowercase)
+      // so pick() finds it even with casing/spacing differences
+      const norm = (col.name || col.display_name || '')
+        .toLowerCase().replace(/[\s_()+]+/g, '')
+      if (norm) obj[`__norm__${norm}`] = val
+    })
     return obj
   })
 }
 
-// Flexible field lookup: tries exact match then case/space-insensitive match
+// Flexible value lookup:
+//   1. Try exact key first
+//   2. Try display_name / field_name variants
+//   3. Try fully-normalised fallback key
 function pick(obj, ...candidates) {
   for (const key of candidates) {
-    if (obj[key] !== undefined && obj[key] !== null) return obj[key]
-    const k2 = key.toLowerCase().replace(/[\s_]+/g, '')
-    const found = Object.entries(obj).find(
-      ([k]) => k.toLowerCase().replace(/[\s_]+/g, '') === k2
-    )
-    if (found && found[1] !== null) return found[1]
+    // Exact match
+    if (key in obj && obj[key] !== undefined) return obj[key]
+    // Normalised fallback
+    const norm = `__norm__${key.toLowerCase().replace(/[\s_()+]+/g, '')}`
+    if (norm in obj && obj[norm] !== undefined) return obj[norm]
   }
   return null
 }
 
-// Handle both Excel serial date numbers and ISO date strings
+// Handle both ISO date strings and Excel serial numbers
 function parseDate(val) {
   if (!val && val !== 0) return null
   if (typeof val === 'number') {
-    // Excel counts from 1900-01-00; 25569 = days between 1900-01-01 and 1970-01-01
+    // Excel serial date: 25569 = days between 1900-01-01 and 1970-01-01
     return new Date((val - 25569) * 86400000)
   }
   const d = new Date(val)
-  return isNaN(d) ? null : d
+  return isNaN(d.getTime()) ? null : d
 }
 
 export default async function handler(req, res) {
@@ -68,7 +85,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
 
-  const { facility } = req.query
+  const { facility, debug } = req.query
   if (!facility) return res.status(400).json({ error: 'facility param required' })
 
   if (!METABASE_URL || !METABASE_EMAIL || !METABASE_PASS) {
@@ -80,56 +97,99 @@ export default async function handler(req, res) {
   try {
     const token = await getToken()
 
-    const [inventory, demand, sales] = await Promise.all([
-      runQuestion(QID_INVENTORY, token),
-      runQuestion(QID_DEMAND, token),
-      runQuestion(QID_SALES, token),
+    // Fetch all 3 questions in parallel
+    const [rawInv, rawDemand, rawSales] = await Promise.all([
+      runQuestionRaw(QID_INVENTORY, token),
+      runQuestionRaw(QID_DEMAND,    token),
+      runQuestionRaw(QID_SALES,     token),
     ])
 
-    // Build per-SKU maps, filtered to the requested facility
+    // Debug mode: return raw column info so column-name mismatches can be spotted
+    if (debug === 'true') {
+      return res.json({
+        note: 'Debug mode — shows raw Metabase column metadata and sample rows',
+        inventory: {
+          cols: (rawInv.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
+          sample: (rawInv.data?.rows || []).slice(0, 3),
+        },
+        demand: {
+          cols: (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
+          sample: (rawDemand.data?.rows || []).slice(0, 3),
+        },
+        sales: {
+          cols: (rawSales.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
+          sample: (rawSales.data?.rows || []).slice(0, 3),
+        },
+      })
+    }
+
+    const inventory  = toRows(rawInv)
+    const demand     = toRows(rawDemand)
+    const sales      = toRows(rawSales)
+
+    // ── Build per-SKU maps, filtered to the requested facility ─────────────────
+
     const invMap    = {}
     const demandMap = {}
     const salesMap  = {}
 
     for (const row of inventory) {
-      const org = pick(row, 'organization_name')
-      const sku = pick(row, 'sku')
+      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
+      const sku = pick(row, 'sku', 'SKU', 'Sku')
       if (org === facility && sku) {
-        invMap[sku] = parseFloat(pick(row, 'supply_pack_quantity') ?? 0) || 0
+        const qty = pick(row, 'supply_pack_quantity', 'Supply Pack Quantity', 'stock_available', 'Stock Available', 'quantity', 'Quantity')
+        invMap[sku] = (qty !== null && qty !== undefined) ? parseFloat(qty) : 0
       }
     }
 
     for (const row of demand) {
-      const org = pick(row, 'organization_name')
-      const sku = pick(row, 'sku')
+      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
+      const sku = pick(row, 'sku', 'SKU', 'Sku')
       if (org === facility && sku) {
+        const abc = pick(row,
+          'ABC_category', 'ABC Category', 'abc_category', 'ABCcategory',
+          'ABC class', 'abc_class', 'ABCClass', 'Class', 'abc'
+        )
+        const total = pick(row,
+          'Sum of total_demand', 'Sum_of_total_demand', 'total_demand', 'Total Demand',
+          'sum_of_total_demand', 'sumoftotaldemand', 'total demand', 'TotalDemand',
+          'demand', 'Demand'
+        )
         demandMap[sku] = {
-          abcClass:    pick(row, 'ABC_category', 'abc_category', 'ABCcategory') || '',
-          totalDemand: parseFloat(pick(row, 'Sum of total_demand', 'total_demand') ?? 0) || 0,
+          abcClass:    (abc   !== null) ? String(abc)         : null,
+          totalDemand: (total !== null) ? parseFloat(total)   : 0,
         }
       }
     }
 
     for (const row of sales) {
-      const org = pick(row, 'organization_name')
-      const sku = pick(row, 'sku')
+      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
+      const sku = pick(row, 'sku', 'SKU', 'Sku')
       if (org === facility && sku) {
-        const restockDate = parseDate(pick(row, 'last restock date', 'last_restock_date'))
+        const restockRaw = pick(row,
+          'last restock date', 'Last Restock Date', 'last_restock_date',
+          'Last_restock_date', 'LastRestockDate', 'restock_date'
+        )
+        const restockDate = parseDate(restockRaw)
         const today = new Date()
         const daysSince = restockDate
           ? Math.max(1, Math.floor((today - restockDate) / 86400000))
           : 30
 
+        const salesQty = pick(row,
+          'Sales since last restock date', 'Sales Since Last Restock Date',
+          'sales_since_last_restock', 'Sales_since_last_restock',
+          'salessincelastrestockdate', 'sales_since_restock', 'sales'
+        )
+
         salesMap[sku] = {
-          salesSinceRestock: parseFloat(
-            pick(row, 'Sales since last restock date', 'sales_since_last_restock') ?? 0
-          ) || 0,
-          daysSinceRestock: daysSince,
+          salesSinceRestock: (salesQty !== null) ? parseFloat(salesQty) || 0 : 0,
+          daysSinceRestock:  daysSince,
         }
       }
     }
 
-    // Merge everything into one per-SKU object
+    // ── Merge into one per-SKU result ────────────────────────────────────────
     const allSkus = new Set([
       ...Object.keys(invMap),
       ...Object.keys(demandMap),
@@ -139,17 +199,17 @@ export default async function handler(req, res) {
     const items = {}
     for (const sku of allSkus) {
       items[sku] = {
-        hmisStock:          invMap[sku]              ?? null,
-        abcClass:           demandMap[sku]?.abcClass  ?? null,
-        demandPlanningTotal:demandMap[sku]?.totalDemand ?? 0,
-        salesSinceRestock:  salesMap[sku]?.salesSinceRestock ?? 0,
-        daysSinceRestock:   salesMap[sku]?.daysSinceRestock  ?? 30,
+        hmisStock:           sku in invMap ? invMap[sku] : null,
+        abcClass:            demandMap[sku]?.abcClass    ?? null,
+        demandPlanningTotal: demandMap[sku]?.totalDemand ?? 0,
+        salesSinceRestock:   salesMap[sku]?.salesSinceRestock ?? 0,
+        daysSinceRestock:    salesMap[sku]?.daysSinceRestock  ?? 30,
       }
     }
 
-    // Cache for 30 minutes (stale-while-revalidate keeps it feeling instant)
+    // Cache for 30 minutes
     res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=86400')
-    return res.json({ facility, items })
+    return res.json({ facility, items, sku_count: allSkus.size })
 
   } catch (err) {
     console.error('[validation]', err.message)

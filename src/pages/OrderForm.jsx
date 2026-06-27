@@ -488,11 +488,11 @@ export default function OrderForm() {
                                     } Please confirm.
                                   </p>
                                   <div className="flex gap-2">
-                                    <button onClick={() => confirmVariance(it._key, false)}
+                                    <button onClick={() => confirmVariance(it._key, true)}
                                       className="text-xs px-2.5 py-1.5 bg-white border border-amber-300 text-amber-700 rounded-lg font-bold hover:bg-amber-50">
                                       Use system ({it._hmisVariance.hmisStock})
                                     </button>
-                                    <button onClick={() => confirmVariance(it._key, true)}
+                                    <button onClick={() => confirmVariance(it._key, false)}
                                       className="text-xs px-2.5 py-1.5 bg-amber-600 text-white rounded-lg font-bold hover:bg-amber-700">
                                       Confirm my count
                                     </button>
