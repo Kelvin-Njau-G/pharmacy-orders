@@ -104,21 +104,35 @@ export default async function handler(req, res) {
       runQuestionRaw(QID_SALES,     token),
     ])
 
-    // Debug mode: return raw column info so column-name mismatches can be spotted
+    // Debug mode: return raw column info + facility-filtered sample rows
     if (debug === 'true') {
+      const inventory  = toRows(rawInv)
+      const demand     = toRows(rawDemand)
+      const sales      = toRows(rawSales)
+
+      const facInv    = inventory.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
+      const facDemand = demand.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
+      const facSales  = sales.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
+
       return res.json({
-        note: 'Debug mode — shows raw Metabase column metadata and sample rows',
+        note: `Debug for facility: ${facility}`,
         inventory: {
-          cols: (rawInv.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
-          sample: (rawInv.data?.rows || []).slice(0, 3),
+          cols: (rawInv.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows: facInv,
+          total_rows: (rawInv.data?.rows || []).length,
+          facility_count: inventory.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
         },
         demand: {
-          cols: (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
-          sample: (rawDemand.data?.rows || []).slice(0, 3),
+          cols: (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows: facDemand,
+          total_rows: (rawDemand.data?.rows || []).length,
+          facility_count: demand.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
         },
         sales: {
-          cols: (rawSales.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name, base_type: c.base_type })),
-          sample: (rawSales.data?.rows || []).slice(0, 3),
+          cols: (rawSales.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows: facSales,
+          total_rows: (rawSales.data?.rows || []).length,
+          facility_count: sales.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
         },
       })
     }
