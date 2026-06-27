@@ -137,7 +137,14 @@ export default async function handler(req, res) {
       const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
       const sku = pick(row, 'sku', 'SKU', 'Sku')
       if (org === facility && sku) {
-        const qty = pick(row, 'supply_pack_quantity', 'Supply Pack Quantity', 'stock_available', 'Stock Available', 'quantity', 'Quantity')
+        const qty = pick(row,
+          'sum',                     // Metabase field name for this aggregation
+          'Sum of supply_quantity',  // Metabase display name
+          'supply_pack_quantity',    // name in Google Sheets export
+          'Supply Pack Quantity',
+          'stock_available',
+          'quantity'
+        )
         invMap[sku] = (qty !== null && qty !== undefined) ? parseFloat(qty) : 0
       }
     }
@@ -167,8 +174,12 @@ export default async function handler(req, res) {
       const sku = pick(row, 'sku', 'SKU', 'Sku')
       if (org === facility && sku) {
         const restockRaw = pick(row,
-          'last restock date', 'Last Restock Date', 'last_restock_date',
-          'Last_restock_date', 'LastRestockDate', 'restock_date'
+          'last_movement_date',   // Metabase field name
+          'last restock date',    // name in Google Sheets export
+          'Last Restock Date',
+          'last_restock_date',
+          'Last_restock_date',
+          'restock_date'
         )
         const restockDate = parseDate(restockRaw)
         const today = new Date()
