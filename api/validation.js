@@ -1,13 +1,13 @@
 // Vercel serverless function — secure Metabase proxy
 // GET /api/validation?facility=Well+Living+Medical+Clinic
-// GET /api/validation?facility=...&debug=true   ← shows raw column names
+// GET /api/validation?facility=...&debug=true
 
 const METABASE_URL   = process.env.METABASE_URL
 const METABASE_EMAIL = process.env.METABASE_EMAIL
 const METABASE_PASS  = process.env.METABASE_PASSWORD
 
-const QID_INVENTORY = 2501  // Pharmacy Inventory → HMIS stock per facility/SKU
-const QID_DEMAND    = 2689  // Demand Planning    → ABC class, total demand
+const QID_INVENTORY = 2501  // Pharmacy Inventory  → HMIS stock
+const QID_DEMAND    = 2689  // Demand Planning     → ABC class, total demand  ← hits 10k row limit
 const QID_SALES     = 2799  // Sales since restock → sales qty, last restock date
 
 async function getToken() {
@@ -21,28 +21,53 @@ async function getToken() {
   return id
 }
 
-// Returns raw Metabase query response (for debug and for dual-key processing)
+// Standard saved-question query — works for Q2501 and Q2799 (both under 10k rows)
 async function runQuestionRaw(cardId, token) {
   const r = await fetch(`${METABASE_URL}/api/card/${cardId}/query`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
-    body: JSON.stringify({
-      // Override Metabase's default 10,000-row limit.
-      // Demand planning (Q2689) has 6+ facilities × ~1,600 SKUs = ~10,000+ rows
-      // which causes Well Living's data to be silently truncated at the default limit.
-      constraints: {
-        'max-results':          50000,
-        'max-results-bare-rows': 50000,
-      },
-    }),
+    body:    JSON.stringify({}),
   })
   if (!r.ok) throw new Error(`Card ${cardId} failed: ${r.status}`)
   return r.json()
 }
 
-// Convert Metabase cols/rows to array of objects.
-// Stores each value under BOTH the field name (c.name) and the display name
-// (c.display_name) so pick() can find columns regardless of which format Metabase uses.
+// Q2689 (demand planning) has ~1,600 SKUs × 6 facilities = ~10,000+ rows
+// which Metabase hard-caps at exactly 10,000 — cutting off Well Living's data.
+// Fix: use /api/dataset with source-table: card__2689 + an org_name filter.
+// This applies the filter BEFORE the row cap, returning only ~1,600 rows.
+async function runQuestionFiltered(cardId, token, facilityName) {
+  // Step 1: get the database ID from the card's metadata
+  const metaResp = await fetch(`${METABASE_URL}/api/card/${cardId}`, {
+    headers: { 'X-Metabase-Session': token },
+  })
+  if (!metaResp.ok) throw new Error(`Card ${cardId} meta failed: ${metaResp.status}`)
+  const { database_id: dbId } = await metaResp.json()
+
+  // Step 2: run ad-hoc query using the saved card as a nested source with a filter
+  const r = await fetch(`${METABASE_URL}/api/dataset`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
+    body: JSON.stringify({
+      database: dbId,
+      type:     'query',
+      query: {
+        'source-table': `card__${cardId}`,
+        filter: [
+          '=',
+          ['field', 'organization_name', { 'base-type': 'type/Text' }],
+          facilityName,
+        ],
+      },
+    }),
+  })
+  if (!r.ok) throw new Error(`Dataset card__${cardId} failed: ${r.status}`)
+  return r.json()
+}
+
+// Convert Metabase cols/rows → array of objects.
+// Stores each value under BOTH field name (c.name) AND display name (c.display_name)
+// so pick() always finds columns regardless of which format Metabase uses.
 function toRows(json) {
   const cols = json.data?.cols || []
   const rows = json.data?.rows || []
@@ -52,8 +77,6 @@ function toRows(json) {
       const val = row[i]
       if (col.name)         obj[col.name]         = val
       if (col.display_name) obj[col.display_name]  = val
-      // Also store a fully-normalised key (no spaces/underscores, lowercase)
-      // so pick() finds it even with casing/spacing differences
       const norm = (col.name || col.display_name || '')
         .toLowerCase().replace(/[\s_()+]+/g, '')
       if (norm) obj[`__norm__${norm}`] = val
@@ -62,28 +85,20 @@ function toRows(json) {
   })
 }
 
-// Flexible value lookup:
-//   1. Try exact key first
-//   2. Try display_name / field_name variants
-//   3. Try fully-normalised fallback key
+// Flexible value lookup: exact match → normalised fallback
 function pick(obj, ...candidates) {
   for (const key of candidates) {
-    // Exact match
     if (key in obj && obj[key] !== undefined) return obj[key]
-    // Normalised fallback
     const norm = `__norm__${key.toLowerCase().replace(/[\s_()+]+/g, '')}`
     if (norm in obj && obj[norm] !== undefined) return obj[norm]
   }
   return null
 }
 
-// Handle both ISO date strings and Excel serial numbers
+// Handle ISO date strings and Excel serial numbers
 function parseDate(val) {
   if (!val && val !== 0) return null
-  if (typeof val === 'number') {
-    // Excel serial date: 25569 = days between 1900-01-01 and 1970-01-01
-    return new Date((val - 25569) * 86400000)
-  }
+  if (typeof val === 'number') return new Date((val - 25569) * 86400000)
   const d = new Date(val)
   return isNaN(d.getTime()) ? null : d
 }
@@ -97,30 +112,29 @@ export default async function handler(req, res) {
   if (!facility) return res.status(400).json({ error: 'facility param required' })
 
   if (!METABASE_URL || !METABASE_EMAIL || !METABASE_PASS) {
-    return res.status(503).json({
-      error: 'Metabase credentials not configured. Add METABASE_URL, METABASE_EMAIL, METABASE_PASSWORD in Vercel environment variables.',
-    })
+    return res.status(503).json({ error: 'Metabase credentials not configured in Vercel environment variables.' })
   }
 
   try {
     const token = await getToken()
 
-    // Fetch all 3 questions in parallel
-    const [rawInv, rawDemand, rawSales] = await Promise.all([
+    // Inventory and Sales are under 10k rows → normal card query
+    // Demand hits the 10k limit → filtered /api/dataset query
+    const [rawInv, rawSales, rawDemand] = await Promise.all([
       runQuestionRaw(QID_INVENTORY, token),
-      runQuestionRaw(QID_DEMAND,    token),
       runQuestionRaw(QID_SALES,     token),
+      runQuestionFiltered(QID_DEMAND, token, facility),
     ])
 
-    // Debug mode: return raw column info + facility-filtered sample rows
+    // Debug mode — shows raw column + filtered row data for the facility
     if (debug === 'true') {
-      const inventory  = toRows(rawInv)
-      const demand     = toRows(rawDemand)
-      const sales      = toRows(rawSales)
+      const inventory = toRows(rawInv)
+      const demand    = toRows(rawDemand)
+      const sales     = toRows(rawSales)
 
-      const facInv    = inventory.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
-      const facDemand = demand.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
-      const facSales  = sales.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).slice(0, 5)
+      const facInv    = inventory.filter(r => pick(r, 'organization_name') === facility).slice(0, 5)
+      const facDemand = demand.filter(r =>   pick(r, 'organization_name') === facility).slice(0, 5)
+      const facSales  = sales.filter(r =>    pick(r, 'organization_name') === facility).slice(0, 5)
 
       return res.json({
         note: `Debug for facility: ${facility}`,
@@ -128,80 +142,76 @@ export default async function handler(req, res) {
           cols: (rawInv.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
           facility_rows: facInv,
           total_rows: (rawInv.data?.rows || []).length,
-          facility_count: inventory.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
+          facility_count: inventory.filter(r => pick(r, 'organization_name') === facility).length,
         },
         demand: {
           cols: (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
           facility_rows: facDemand,
           total_rows: (rawDemand.data?.rows || []).length,
-          facility_count: demand.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
+          facility_count: demand.filter(r => pick(r, 'organization_name') === facility).length,
         },
         sales: {
           cols: (rawSales.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
           facility_rows: facSales,
           total_rows: (rawSales.data?.rows || []).length,
-          facility_count: sales.filter(r => pick(r, 'organization_name', 'Organization Name') === facility).length,
+          facility_count: sales.filter(r => pick(r, 'organization_name') === facility).length,
         },
       })
     }
 
-    const inventory  = toRows(rawInv)
-    const demand     = toRows(rawDemand)
-    const sales      = toRows(rawSales)
+    const inventory = toRows(rawInv)
+    const demand    = toRows(rawDemand)
+    const sales     = toRows(rawSales)
 
-    // ── Build per-SKU maps, filtered to the requested facility ─────────────────
+    // ── Build per-SKU maps ─────────────────────────────────────────────────────
 
     const invMap    = {}
     const demandMap = {}
     const salesMap  = {}
 
     for (const row of inventory) {
-      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
-      const sku = pick(row, 'sku', 'SKU', 'Sku')
+      const org = pick(row, 'organization_name')
+      const sku = pick(row, 'sku')
       if (org === facility && sku) {
         const qty = pick(row,
-          'sum',                     // Metabase field name for this aggregation
-          'Sum of supply_quantity',  // Metabase display name
-          'supply_pack_quantity',    // name in Google Sheets export
-          'Supply Pack Quantity',
-          'stock_available',
-          'quantity'
+          'sum',                    // Metabase field name for Sum of supply_quantity
+          'Sum of supply_quantity',
+          'supply_pack_quantity',
+          'stock_available', 'quantity'
         )
         invMap[sku] = (qty !== null && qty !== undefined) ? parseFloat(qty) : 0
       }
     }
 
+    // Demand rows are already pre-filtered to this facility by runQuestionFiltered
+    // but we check org anyway for safety
     for (const row of demand) {
-      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
-      const sku = pick(row, 'sku', 'SKU', 'Sku')
-      if (org === facility && sku) {
+      const org = pick(row, 'organization_name')
+      const sku = pick(row, 'sku')
+      if (sku && (org === facility || org === null)) {
         const abc = pick(row,
-          'ABC_category', 'ABC Category', 'abc_category', 'ABCcategory',
-          'ABC class', 'abc_class', 'ABCClass', 'Class', 'abc'
+          'ABC_category', 'ABC Category', 'abc_category',
+          'ABC class', 'abc_class', 'Class'
         )
         const total = pick(row,
-          'Sum of total_demand', 'Sum_of_total_demand', 'total_demand', 'Total Demand',
-          'sum_of_total_demand', 'sumoftotaldemand', 'total demand', 'TotalDemand',
-          'demand', 'Demand'
+          'Sum of total_demand', 'sum_3',
+          'total_demand', 'sum_of_total_demand', 'Total Demand'
         )
         demandMap[sku] = {
-          abcClass:    (abc   !== null) ? String(abc)         : null,
-          totalDemand: (total !== null) ? parseFloat(total)   : 0,
+          abcClass:    abc   !== null ? String(abc)       : null,
+          totalDemand: total !== null ? parseFloat(total) : 0,
         }
       }
     }
 
     for (const row of sales) {
-      const org = pick(row, 'organization_name', 'Organization Name', 'facility', 'Facility')
-      const sku = pick(row, 'sku', 'SKU', 'Sku')
+      const org = pick(row, 'organization_name')
+      const sku = pick(row, 'sku')
       if (org === facility && sku) {
         const restockRaw = pick(row,
           'last_movement_date',   // Metabase field name
-          'last restock date',    // name in Google Sheets export
-          'Last Restock Date',
-          'last_restock_date',
-          'Last_restock_date',
-          'restock_date'
+          'last restock date',
+          'last_restock_date', 'Last Restock Date'
         )
         const restockDate = parseDate(restockRaw)
         const today = new Date()
@@ -210,19 +220,18 @@ export default async function handler(req, res) {
           : 30
 
         const salesQty = pick(row,
-          'Sales since last restock date', 'Sales Since Last Restock Date',
-          'sales_since_last_restock', 'Sales_since_last_restock',
-          'salessincelastrestockdate', 'sales_since_restock', 'sales'
+          'Sales since last restock date',
+          'sales_since_last_restock', 'sales'
         )
 
         salesMap[sku] = {
-          salesSinceRestock: (salesQty !== null) ? parseFloat(salesQty) || 0 : 0,
+          salesSinceRestock: salesQty !== null ? parseFloat(salesQty) || 0 : 0,
           daysSinceRestock:  daysSince,
         }
       }
     }
 
-    // ── Merge into one per-SKU result ────────────────────────────────────────
+    // ── Merge into per-SKU result ──────────────────────────────────────────────
     const allSkus = new Set([
       ...Object.keys(invMap),
       ...Object.keys(demandMap),
@@ -240,7 +249,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Cache for 30 minutes
     res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=86400')
     return res.json({ facility, items, sku_count: allSkus.size })
 
