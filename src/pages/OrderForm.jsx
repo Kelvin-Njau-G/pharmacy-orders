@@ -29,6 +29,13 @@ function fmt(n) {
   if (isNaN(v)) return '—'
   return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES', minimumFractionDigits:0 }).format(v)
 }
+// Format a number to at most 2 decimal places, stripping trailing zeros
+function fmtVal(v) {
+  if (v === null || v === undefined) return '0'
+  const n = parseFloat(v)
+  if (isNaN(n)) return '0'
+  return parseFloat(n.toFixed(2)).toString()
+}
 function fmtDateTime(str) {
   if (!str) return '—'
   return new Date(str).toLocaleString('en-KE', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
@@ -68,7 +75,40 @@ export default function OrderForm() {
   const [dragKey,     setDragKey]     = useState(null)
   const [dragOverKey, setDragOverKey] = useState(null)
 
-  // Auto-scroll when dragging near the top or bottom of the viewport
+  // Auto-validate all items once validation data loads, so amber errors appear
+  // immediately on an existing draft order without requiring user interaction.
+  useEffect(() => {
+    if (!validationData || !stockSettings || readOnly) return
+    setItems(prev => prev.map((it, idx) => {
+      if (!it.sku) return it
+
+      // Qty / demand validation
+      let error = null
+      if (it.order_quantity && parseInt(it.order_quantity) > 0 && it.reason_for_ordering) {
+        const otherDiscSpend = prev
+          .slice(0, idx)
+          .filter(o => o.reason_for_ordering === 'Pharmtech/Clinician Request' || o.reason_for_ordering === 'Specific Brand')
+          .reduce((s, o) => s + (parseFloat(o.unit_price)||0)*(parseInt(o.order_quantity)||0), 0)
+        const { maxQty, limitReason } = calculateMaxQty({
+          sku: it.sku, reason: it.reason_for_ordering, unitPrice: it.unit_price,
+          validationData, settings: stockSettings, facilityBudget,
+          otherDiscretionarySpend: otherDiscSpend,
+        })
+        const qty = parseInt(it.order_quantity) || 0
+        if (maxQty === 0) error = limitReason
+        else if (qty > maxQty) error = `Maximum approved quantity is ${maxQty} units. Please reduce to ${maxQty} or remove this product.`
+      }
+
+      // HMIS variance check for pre-filled stock values
+      let hmisVariance = it._hmisVariance
+      const stockVal = it.current_available_stock
+      if (stockVal !== '' && stockVal !== null && stockVal !== undefined) {
+        hmisVariance = checkHmisVariance(stockVal, validationData[it.sku]?.hmisStock)
+      }
+
+      return { ...it, _error: error, _hmisVariance: hmisVariance }
+    }))
+  }, [validationData, stockSettings, facilityBudget])
   useEffect(() => {
     if (!dragKey) return
     let animFrame
@@ -463,13 +503,13 @@ export default function OrderForm() {
                               </svg>
                               L90D demand:&nbsp;
                               <span className={`font-bold ${noData ? 'text-gray-300' : 'text-gray-700'}`}>
-                                {l90.toFixed(1)} units/mo
+                                {fmtVal(l90)} units/mo
                               </span>
                             </span>
                             <span className="text-xs text-gray-400 font-medium">
                               · HMIS stock:&nbsp;
                               <span className={`font-bold ${noData ? 'text-gray-300' : 'text-gray-700'}`}>
-                                {hmis} units
+                                {fmtVal(hmis)} units
                               </span>
                             </span>
                             {noData && (
