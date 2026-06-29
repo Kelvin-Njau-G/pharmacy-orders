@@ -32,11 +32,8 @@ async function getDbId(cardId, token) {
   return database_id
 }
 
-// ── Facility-filtered query ───────────────────────────────────────────────────
-// Uses /api/dataset with source-table: card__N + organization_name filter.
-// This applies the WHERE clause at database level before any row limit is counted,
-// so it returns only ~5,000–7,000 rows per facility regardless of how many
-// facilities or SKUs exist — permanently safe for 100 facilities × 7,000 SKUs.
+// ── Facility-filtered query (inventory & sales) ──────────────────────────────
+// Q2501 and Q2799 return <2,000 rows per facility so a simple org_name filter works.
 async function runFiltered(cardId, dbId, token, facilityName) {
   const r = await fetch(`${METABASE_URL}/api/dataset`, {
     method:  'POST',
@@ -46,16 +43,40 @@ async function runFiltered(cardId, dbId, token, facilityName) {
       type:     'query',
       query: {
         'source-table': `card__${cardId}`,
-        filter: [
-          '=',
-          ['field', 'organization_name', { 'base-type': 'type/Text' }],
-          facilityName,
-        ],
-        limit: 10000,   // generous headroom: 10k per-facility SKUs before revisit
+        filter: ['=', ['field', 'organization_name', { 'base-type': 'type/Text' }], facilityName],
+        limit: 10000,
       },
+      constraints: { 'max-results': 10000, 'max-results-bare-rows': 10000 },
     }),
   })
   if (!r.ok) throw new Error(`Dataset card__${cardId} failed: ${r.status}`)
+  return r.json()
+}
+
+// ── Demand planning filtered query ────────────────────────────────────────────
+// Q2689 returns ALL ~5,400 SKUs per facility (even 0-demand rows), hitting the
+// 2,000-row API cap and dropping products like SPHE004 that sort past row 2,000.
+// Fix: add total_demand (sum_3) > 0 — shrinks result to ~300-500 rows with real
+// demand signals, safely under any limit. Missing products get 0-default treatment.
+async function runDemandFiltered(cardId, dbId, token, facilityName) {
+  const r = await fetch(`${METABASE_URL}/api/dataset`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
+    body: JSON.stringify({
+      database: dbId,
+      type:     'query',
+      query: {
+        'source-table': `card__${cardId}`,
+        filter: ['and',
+          ['=', ['field', 'organization_name', { 'base-type': 'type/Text' }], facilityName],
+          ['>', ['field', 'sum_3',             { 'base-type': 'type/Float' }], 0],
+        ],
+        limit: 10000,
+      },
+      constraints: { 'max-results': 10000, 'max-results-bare-rows': 10000 },
+    }),
+  })
+  if (!r.ok) throw new Error(`Demand dataset card__${cardId} failed: ${r.status}`)
   return r.json()
 }
 
@@ -121,7 +142,7 @@ export default async function handler(req, res) {
     // safe regardless of total facilities or SKU count.
     const [rawInv, rawDemand, rawSales] = await Promise.all([
       runFiltered(QID_INVENTORY, dbId, token, facility),
-      runFiltered(QID_DEMAND,    dbId, token, facility),
+      runDemandFiltered(QID_DEMAND, dbId, token, facility),
       runFiltered(QID_SALES,     dbId, token, facility),
     ])
 

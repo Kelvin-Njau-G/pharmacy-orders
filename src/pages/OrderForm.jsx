@@ -448,29 +448,32 @@ export default function OrderForm() {
                         ? <p className="font-bold text-gray-900 text-sm">{it.product_name || '—'}</p>
                         : <ProductSearch value={it.product_name} onSelect={p => onProductSelect(it._key, p)} />
                       }
-                      {/* L90D demand hint — shown once a product is selected and validation data is loaded */}
-                      {it.sku && validationData?.[it.sku] && !readOnly && (() => {
-                        const d = validationData[it.sku]
-                        const hasL90  = d.l90DayDemand !== null && d.l90DayDemand !== undefined
-                        const hasHmis = d.hmisStock    !== null && d.hmisStock    !== undefined
-                        if (!hasL90 && !hasHmis) return null
+                      {/* Validation data hint — always shown once a product is selected and loading is complete */}
+                      {it.sku && !readOnly && !validationLoading && (() => {
+                        const d      = validationData?.[it.sku]
+                        const l90    = d?.l90DayDemand ?? 0
+                        const hmis   = d?.hmisStock    ?? 0
+                        const noData = !d
                         return (
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            {hasL90 && (
-                              <span className="inline-flex items-center gap-1 text-xs text-gray-400 font-medium">
-                                <svg className="w-3 h-3 text-brand/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                                </svg>
-                                L90D demand:&nbsp;
-                                <span className="text-gray-700 font-bold">{d.l90DayDemand.toFixed(1)} units/mo</span>
+                            <span className="inline-flex items-center gap-1 text-xs text-gray-400 font-medium">
+                              <svg className="w-3 h-3 text-brand/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                              </svg>
+                              L90D demand:&nbsp;
+                              <span className={`font-bold ${noData ? 'text-gray-300' : 'text-gray-700'}`}>
+                                {l90.toFixed(1)} units/mo
                               </span>
-                            )}
-                            {hasHmis && (
-                              <span className="text-xs text-gray-400 font-medium">
-                                · HMIS stock:&nbsp;
-                                <span className="text-gray-700 font-bold">{d.hmisStock} units</span>
+                            </span>
+                            <span className="text-xs text-gray-400 font-medium">
+                              · HMIS stock:&nbsp;
+                              <span className={`font-bold ${noData ? 'text-gray-300' : 'text-gray-700'}`}>
+                                {hmis} units
                               </span>
+                            </span>
+                            {noData && (
+                              <span className="text-xs text-gray-300 font-medium">· no Metabase data</span>
                             )}
                           </div>
                         )

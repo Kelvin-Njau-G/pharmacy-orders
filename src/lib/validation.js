@@ -22,12 +22,17 @@ export function calculateMaxQty({
   otherDiscretionarySpend = 0,
 }) {
   const item = validationData?.[sku]
-  // No Metabase data for this SKU at all → no cap applied
-  if (!item) return { maxQty: Infinity, limitReason: null }
 
-  // null hmisStock means Q2501 has no record of this product — treat as 0
-  const hmisStock         = item.hmisStock ?? 0
-  const { abcClass, demandPlanningTotal, salesSinceRestock, daysSinceRestock } = item
+  // If the product is absent from Metabase entirely, use 0 defaults rather than
+  // skipping validation. This means:
+  //   • Patient Request      → still approved (early return below)
+  //   • Budget-based reasons → still budget-capped (early return below)
+  //   • Demand-based reasons → maxQty = 0 ("No validated demand")
+  const hmisStock           = item?.hmisStock           ?? 0
+  const abcClass            = item?.abcClass             ?? null
+  const demandPlanningTotal = item?.demandPlanningTotal  ?? 0
+  const salesSinceRestock   = item?.salesSinceRestock    ?? 0
+  const daysSinceRestock    = item?.daysSinceRestock     ?? 30
 
   const daysToStock = getDaysToStock(abcClass, settings)
   const dailyRate   = daysSinceRestock > 0 ? salesSinceRestock / daysSinceRestock : 0
