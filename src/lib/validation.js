@@ -1,11 +1,7 @@
 // ── Quantity validation logic ─────────────────────────────────────────────────
-// Mirrors the "Quantity Approved" formula in the Review tab.
-// Days-to-stock values confirmed from Order Review Logic tab:
-//   Class A = 20, Class B = 20, Class C = 15, fallback = 5
 
 export function getDaysToStock(abcClass, settings) {
   if (!settings) return 5
-  // Normalise the class label — Metabase may return "Class B", "class b", "B", etc.
   const cls = String(abcClass || '').toLowerCase().trim()
   if (cls === 'class a' || cls === 'a') return Number(settings.class_a_days) || 20
   if (cls === 'class b' || cls === 'b') return Number(settings.class_b_days) || 20
@@ -13,8 +9,9 @@ export function getDaysToStock(abcClass, settings) {
   return Number(settings.fallback_days) || 5
 }
 
-// Maximum allowed quantity for one order item.
 // Returns { maxQty, limitReason } — maxQty = Infinity means no cap.
+// When hmisStock is null (product not in Q2501), treat it as 0 so that
+// validation still runs based on demand signals alone.
 export function calculateMaxQty({
   sku,
   reason,
@@ -25,29 +22,21 @@ export function calculateMaxQty({
   otherDiscretionarySpend = 0,
 }) {
   const item = validationData?.[sku]
+  // No Metabase data for this SKU at all → no cap applied
+  if (!item) return { maxQty: Infinity, limitReason: null }
 
-  // No Metabase data for this SKU at this facility → no cap applied
-  if (!item || item.hmisStock === null) {
-    return { maxQty: Infinity, limitReason: null }
-  }
+  // null hmisStock means Q2501 has no record of this product — treat as 0
+  const hmisStock         = item.hmisStock ?? 0
+  const { abcClass, demandPlanningTotal, salesSinceRestock, daysSinceRestock } = item
 
-  const { hmisStock, abcClass, demandPlanningTotal, salesSinceRestock, daysSinceRestock } = item
+  const daysToStock = getDaysToStock(abcClass, settings)
+  const dailyRate   = daysSinceRestock > 0 ? salesSinceRestock / daysSinceRestock : 0
+  const salesDemand = dailyRate * daysToStock
+  const maxDemand   = Math.max(demandPlanningTotal || 0, salesDemand)
+  const qtyNeeded   = Math.max(0, Math.ceil(maxDemand - hmisStock))
 
-  const daysToStock   = getDaysToStock(abcClass, settings)
-  const dailyRate     = daysSinceRestock > 0 ? salesSinceRestock / daysSinceRestock : 0
-  const salesDemand   = dailyRate * daysToStock
-  const maxDemand     = Math.max(demandPlanningTotal || 0, salesDemand)
-  // Round up just like ROUNDUP(MAX(J,M,N) - I, 0) in the spreadsheet
-  const qtyNeeded     = Math.max(0, Math.ceil(maxDemand - (hmisStock || 0)))
+  if (reason === 'Patient Request') return { maxQty: Infinity, limitReason: null }
 
-  // ── Per-reason rules ───────────────────────────────────────────────────────
-
-  // Patient Request: always approve what was asked
-  if (reason === 'Patient Request') {
-    return { maxQty: Infinity, limitReason: null }
-  }
-
-  // Pharmtech/Clinician Request or Specific Brand: limited by discretionary budget
   if (reason === 'Pharmtech/Clinician Request' || reason === 'Specific Brand') {
     const remaining = facilityBudget - otherDiscretionarySpend
     if (remaining <= 0) {
@@ -66,7 +55,7 @@ export function calculateMaxQty({
     }
   }
 
-  // All other reasons: demand-based cap
+  // Demand-based cap
   if (hmisStock > 0 && hmisStock >= maxDemand && maxDemand > 0) {
     return {
       maxQty: 0,
@@ -85,24 +74,25 @@ export function calculateMaxQty({
 }
 
 // ── HMIS stock variance check ─────────────────────────────────────────────────
-// Returns null if within tolerance, or { staffStock, hmisStock, variancePct } if >±20%.
-export function checkHmisVariance(staffStockRaw, hmisStock) {
-  if (hmisStock === null || hmisStock === undefined) return null
+// When hmisStockRaw is null (product absent from Q2501), treat as 0 so that
+// the variance alert still fires when staff enter a non-zero physical count.
+export function checkHmisVariance(staffStockRaw, hmisStockRaw) {
   if (staffStockRaw === '' || staffStockRaw === null || staffStockRaw === undefined) return null
 
-  const staff = parseFloat(staffStockRaw)
-  const hmis  = parseFloat(hmisStock)
-  if (isNaN(staff) || isNaN(hmis)) return null
-  if (staff === hmis) return null
+  // null → 0: product not in HMIS, so system effectively shows 0
+  const hmisStock = hmisStockRaw ?? 0
+  const staff     = parseFloat(staffStockRaw)
+  if (isNaN(staff)) return null
+  if (staff === hmisStock) return null
 
-  if (hmis === 0) {
+  if (hmisStock === 0) {
     return staff !== 0
-      ? { staffStock: staff, hmisStock: hmis, variancePct: null }
+      ? { staffStock: staff, hmisStock: 0, variancePct: null }
       : null
   }
 
-  const pct = (staff - hmis) / hmis
+  const pct = (staff - hmisStock) / hmisStock
   return Math.abs(pct) >= 0.2
-    ? { staffStock: staff, hmisStock: hmis, variancePct: pct }
+    ? { staffStock: staff, hmisStock, variancePct: pct }
     : null
 }

@@ -6,10 +6,11 @@ const METABASE_URL   = process.env.METABASE_URL
 const METABASE_EMAIL = process.env.METABASE_EMAIL
 const METABASE_PASS  = process.env.METABASE_PASSWORD
 
-const QID_INVENTORY = 2501  // Pharmacy Inventory  → HMIS stock
-const QID_DEMAND    = 2689  // Demand Planning     → ABC class, total demand  ← hits 10k row limit
+const QID_INVENTORY = 2501  // Pharmacy Inventory  → HMIS stock per facility/SKU
+const QID_DEMAND    = 2689  // Demand Planning     → ABC class, total demand
 const QID_SALES     = 2799  // Sales since restock → sales qty, last restock date
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
 async function getToken() {
   const r = await fetch(`${METABASE_URL}/api/session`, {
     method:  'POST',
@@ -21,30 +22,22 @@ async function getToken() {
   return id
 }
 
-// Standard saved-question query — works for Q2501 and Q2799 (both under 10k rows)
-async function runQuestionRaw(cardId, token) {
-  const r = await fetch(`${METABASE_URL}/api/card/${cardId}/query`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
-    body:    JSON.stringify({}),
-  })
-  if (!r.ok) throw new Error(`Card ${cardId} failed: ${r.status}`)
-  return r.json()
-}
-
-// Q2689 (demand planning) has ~1,600 SKUs × 6 facilities = ~10,000+ rows
-// which Metabase hard-caps at exactly 10,000 — cutting off Well Living's data.
-// Fix: use /api/dataset with source-table: card__2689 + an org_name filter.
-// This applies the filter BEFORE the row cap, returning only ~1,600 rows.
-async function runQuestionFiltered(cardId, token, facilityName) {
-  // Step 1: get the database ID from the card's metadata
-  const metaResp = await fetch(`${METABASE_URL}/api/card/${cardId}`, {
+// ── Get database ID from any card (one call, reused for all three queries) ────
+async function getDbId(cardId, token) {
+  const r = await fetch(`${METABASE_URL}/api/card/${cardId}`, {
     headers: { 'X-Metabase-Session': token },
   })
-  if (!metaResp.ok) throw new Error(`Card ${cardId} meta failed: ${metaResp.status}`)
-  const { database_id: dbId } = await metaResp.json()
+  if (!r.ok) throw new Error(`Card ${cardId} meta failed: ${r.status}`)
+  const { database_id } = await r.json()
+  return database_id
+}
 
-  // Step 2: run ad-hoc query using the saved card as a nested source with a filter
+// ── Facility-filtered query ───────────────────────────────────────────────────
+// Uses /api/dataset with source-table: card__N + organization_name filter.
+// This applies the WHERE clause at database level before any row limit is counted,
+// so it returns only ~5,000–7,000 rows per facility regardless of how many
+// facilities or SKUs exist — permanently safe for 100 facilities × 7,000 SKUs.
+async function runFiltered(cardId, dbId, token, facilityName) {
   const r = await fetch(`${METABASE_URL}/api/dataset`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'X-Metabase-Session': token },
@@ -58,6 +51,7 @@ async function runQuestionFiltered(cardId, token, facilityName) {
           ['field', 'organization_name', { 'base-type': 'type/Text' }],
           facilityName,
         ],
+        limit: 10000,   // generous headroom: 10k per-facility SKUs before revisit
       },
     }),
   })
@@ -65,9 +59,9 @@ async function runQuestionFiltered(cardId, token, facilityName) {
   return r.json()
 }
 
-// Convert Metabase cols/rows → array of objects.
-// Stores each value under BOTH field name (c.name) AND display name (c.display_name)
-// so pick() always finds columns regardless of which format Metabase uses.
+// ── Convert Metabase cols/rows → array of objects ────────────────────────────
+// Stores each value under BOTH the field name (c.name) and display name
+// (c.display_name) so pick() finds columns regardless of Metabase version.
 function toRows(json) {
   const cols = json.data?.cols || []
   const rows = json.data?.rows || []
@@ -75,17 +69,16 @@ function toRows(json) {
     const obj = {}
     cols.forEach((col, i) => {
       const val = row[i]
-      if (col.name)         obj[col.name]         = val
-      if (col.display_name) obj[col.display_name]  = val
-      const norm = (col.name || col.display_name || '')
-        .toLowerCase().replace(/[\s_()+]+/g, '')
+      if (col.name)         obj[col.name]        = val
+      if (col.display_name) obj[col.display_name] = val
+      const norm = (col.name || col.display_name || '').toLowerCase().replace(/[\s_()+]+/g, '')
       if (norm) obj[`__norm__${norm}`] = val
     })
     return obj
   })
 }
 
-// Flexible value lookup: exact match → normalised fallback
+// ── Flexible column lookup ────────────────────────────────────────────────────
 function pick(obj, ...candidates) {
   for (const key of candidates) {
     if (key in obj && obj[key] !== undefined) return obj[key]
@@ -95,7 +88,7 @@ function pick(obj, ...candidates) {
   return null
 }
 
-// Handle ISO date strings and Excel serial numbers
+// ── Date parsing — handles ISO strings and Excel serial numbers ───────────────
 function parseDate(val) {
   if (!val && val !== 0) return null
   if (typeof val === 'number') return new Date((val - 25569) * 86400000)
@@ -103,6 +96,7 @@ function parseDate(val) {
   return isNaN(d.getTime()) ? null : d
 }
 
+// ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   if (req.method === 'OPTIONS') return res.status(200).end()
@@ -116,45 +110,42 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Step 1: authenticate
     const token = await getToken()
 
-    // Inventory and Sales are under 10k rows → normal card query
-    // Demand hits the 10k limit → filtered /api/dataset query
-    const [rawInv, rawSales, rawDemand] = await Promise.all([
-      runQuestionRaw(QID_INVENTORY, token),
-      runQuestionRaw(QID_SALES,     token),
-      runQuestionFiltered(QID_DEMAND, token, facility),
+    // Step 2: get database ID once — all three questions share the same database
+    const dbId = await getDbId(QID_INVENTORY, token)
+
+    // Step 3: run all three filtered queries in parallel
+    // Each returns only rows for the requested facility, making this permanently
+    // safe regardless of total facilities or SKU count.
+    const [rawInv, rawDemand, rawSales] = await Promise.all([
+      runFiltered(QID_INVENTORY, dbId, token, facility),
+      runFiltered(QID_DEMAND,    dbId, token, facility),
+      runFiltered(QID_SALES,     dbId, token, facility),
     ])
 
-    // Debug mode — shows raw column + filtered row data for the facility
+    // ── Debug mode ────────────────────────────────────────────────────────────
     if (debug === 'true') {
-      const inventory = toRows(rawInv)
-      const demand    = toRows(rawDemand)
-      const sales     = toRows(rawSales)
-
-      const facInv    = inventory.filter(r => pick(r, 'organization_name') === facility).slice(0, 5)
-      const facDemand = demand.filter(r =>   pick(r, 'organization_name') === facility).slice(0, 5)
-      const facSales  = sales.filter(r =>    pick(r, 'organization_name') === facility).slice(0, 5)
-
+      const inv    = toRows(rawInv)
+      const demand = toRows(rawDemand)
+      const sales  = toRows(rawSales)
       return res.json({
         note: `Debug for facility: ${facility}`,
         inventory: {
-          cols: (rawInv.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
-          facility_rows: facInv,
-          total_rows: (rawInv.data?.rows || []).length,
-          facility_count: inventory.filter(r => pick(r, 'organization_name') === facility).length,
+          cols:           (rawInv.data?.cols    || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows:  inv.slice(0, 5),
+          total_rows:     inv.length,
         },
         demand: {
-          cols: (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
-          facility_rows: facDemand,
-          total_rows: (rawDemand.data?.rows || []).length,
-          facility_count: demand.filter(r => pick(r, 'organization_name') === facility).length,
+          cols:           (rawDemand.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows:  demand.slice(0, 5),
+          total_rows:     demand.length,
         },
         sales: {
-          cols: (rawSales.data?.cols || []).map(c => ({ name: c.name, display_name: c.display_name })),
-          facility_rows: facSales,
-          total_rows: (rawSales.data?.rows || []).length,
-          facility_count: sales.filter(r => pick(r, 'organization_name') === facility).length,
+          cols:           (rawSales.data?.cols  || []).map(c => ({ name: c.name, display_name: c.display_name })),
+          facility_rows:  sales.slice(0, 5),
+          total_rows:     sales.length,
         },
       })
     }
@@ -163,8 +154,9 @@ export default async function handler(req, res) {
     const demand    = toRows(rawDemand)
     const sales     = toRows(rawSales)
 
-    // ── Build per-SKU maps ─────────────────────────────────────────────────────
-
+    // ── Build per-SKU maps ────────────────────────────────────────────────────
+    // Rows are already facility-filtered by the query, but we keep the org check
+    // as a safety guard against stray rows.
     const invMap    = {}
     const demandMap = {}
     const salesMap  = {}
@@ -172,9 +164,9 @@ export default async function handler(req, res) {
     for (const row of inventory) {
       const org = pick(row, 'organization_name')
       const sku = pick(row, 'sku')
-      if (org === facility && sku) {
+      if (sku && (org === facility || org === null)) {
         const qty = pick(row,
-          'sum',                    // Metabase field name for Sum of supply_quantity
+          'sum',                   // Metabase field name (aggregated SUM)
           'Sum of supply_quantity',
           'supply_pack_quantity',
           'stock_available', 'quantity'
@@ -183,8 +175,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Demand rows are already pre-filtered to this facility by runQuestionFiltered
-    // but we check org anyway for safety
     for (const row of demand) {
       const org = pick(row, 'organization_name')
       const sku = pick(row, 'sku')
@@ -195,11 +185,17 @@ export default async function handler(req, res) {
         )
         const total = pick(row,
           'Sum of total_demand', 'sum_3',
-          'total_demand', 'sum_of_total_demand', 'Total Demand'
+          'total_demand', 'Total Demand'
+        )
+        const l90day = pick(row,
+          'sum',                          // field name in Q2689 for L90Day aggregation
+          'Sum of L90Day_monthly_demand',
+          'l90day_monthly_demand'
         )
         demandMap[sku] = {
-          abcClass:    abc   !== null ? String(abc)       : null,
-          totalDemand: total !== null ? parseFloat(total) : 0,
+          abcClass:     abc    !== null ? String(abc)        : null,
+          totalDemand:  total  !== null ? parseFloat(total)  : 0,
+          l90DayDemand: l90day !== null ? parseFloat(l90day) : null,
         }
       }
     }
@@ -207,23 +203,20 @@ export default async function handler(req, res) {
     for (const row of sales) {
       const org = pick(row, 'organization_name')
       const sku = pick(row, 'sku')
-      if (org === facility && sku) {
+      if (sku && (org === facility || org === null)) {
         const restockRaw = pick(row,
           'last_movement_date',   // Metabase field name
-          'last restock date',
-          'last_restock_date', 'Last Restock Date'
+          'last restock date', 'Last Restock Date', 'last_restock_date'
         )
         const restockDate = parseDate(restockRaw)
-        const today = new Date()
-        const daysSince = restockDate
-          ? Math.max(1, Math.floor((today - restockDate) / 86400000))
+        const daysSince   = restockDate
+          ? Math.max(1, Math.floor((new Date() - restockDate) / 86400000))
           : 30
 
         const salesQty = pick(row,
           'Sales since last restock date',
           'sales_since_last_restock', 'sales'
         )
-
         salesMap[sku] = {
           salesSinceRestock: salesQty !== null ? parseFloat(salesQty) || 0 : 0,
           daysSinceRestock:  daysSince,
@@ -231,7 +224,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // ── Merge into per-SKU result ──────────────────────────────────────────────
+    // ── Merge into per-SKU result ─────────────────────────────────────────────
     const allSkus = new Set([
       ...Object.keys(invMap),
       ...Object.keys(demandMap),
@@ -241,9 +234,11 @@ export default async function handler(req, res) {
     const items = {}
     for (const sku of allSkus) {
       items[sku] = {
+        // null means "not in Q2501" — treated as 0 in calculateMaxQty
         hmisStock:           sku in invMap ? invMap[sku] : null,
-        abcClass:            demandMap[sku]?.abcClass    ?? null,
-        demandPlanningTotal: demandMap[sku]?.totalDemand ?? 0,
+        abcClass:            demandMap[sku]?.abcClass     ?? null,
+        demandPlanningTotal: demandMap[sku]?.totalDemand  ?? 0,
+        l90DayDemand:        demandMap[sku]?.l90DayDemand ?? null,
         salesSinceRestock:   salesMap[sku]?.salesSinceRestock ?? 0,
         daysSinceRestock:    salesMap[sku]?.daysSinceRestock  ?? 30,
       }

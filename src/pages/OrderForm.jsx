@@ -68,6 +68,32 @@ export default function OrderForm() {
   const [dragKey,     setDragKey]     = useState(null)
   const [dragOverKey, setDragOverKey] = useState(null)
 
+  // Auto-scroll when dragging near the top or bottom of the viewport
+  useEffect(() => {
+    if (!dragKey) return
+    let animFrame
+    const EDGE = 100   // px from edge to start scrolling
+    const MAX_SPEED = 18
+
+    function onDragMove(e) {
+      cancelAnimationFrame(animFrame)
+      const y = e.clientY
+      const h = window.innerHeight
+      let speed = 0
+      if (y < EDGE)     speed = -MAX_SPEED * ((EDGE - y) / EDGE)
+      if (y > h - EDGE) speed =  MAX_SPEED * ((y - (h - EDGE)) / EDGE)
+      if (speed !== 0) {
+        animFrame = requestAnimationFrame(() => window.scrollBy({ top: speed, behavior: 'instant' }))
+      }
+    }
+
+    document.addEventListener('dragover', onDragMove)
+    return () => {
+      document.removeEventListener('dragover', onDragMove)
+      cancelAnimationFrame(animFrame)
+    }
+  }, [dragKey])
+
   useEffect(() => { if (isAdmin && isNew) navigate('/admin', { replace: true }) }, [isAdmin, isNew])
 
   const readOnly = isAdmin || (!!order && order.status !== 'Draft')
@@ -422,6 +448,33 @@ export default function OrderForm() {
                         ? <p className="font-bold text-gray-900 text-sm">{it.product_name || '—'}</p>
                         : <ProductSearch value={it.product_name} onSelect={p => onProductSelect(it._key, p)} />
                       }
+                      {/* L90D demand hint — shown once a product is selected and validation data is loaded */}
+                      {it.sku && validationData?.[it.sku] && !readOnly && (() => {
+                        const d = validationData[it.sku]
+                        const hasL90  = d.l90DayDemand !== null && d.l90DayDemand !== undefined
+                        const hasHmis = d.hmisStock    !== null && d.hmisStock    !== undefined
+                        if (!hasL90 && !hasHmis) return null
+                        return (
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            {hasL90 && (
+                              <span className="inline-flex items-center gap-1 text-xs text-gray-400 font-medium">
+                                <svg className="w-3 h-3 text-brand/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                </svg>
+                                L90D demand:&nbsp;
+                                <span className="text-gray-700 font-bold">{d.l90DayDemand.toFixed(1)} units/mo</span>
+                              </span>
+                            )}
+                            {hasHmis && (
+                              <span className="text-xs text-gray-400 font-medium">
+                                · HMIS stock:&nbsp;
+                                <span className="text-gray-700 font-bold">{d.hmisStock} units</span>
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
 
                     {/* SKU badge + remove */}
