@@ -94,7 +94,7 @@ export function calculateMaxQty({
     if (maxDemand > 0 && hmisStock >= maxDemand) {
       return {
         maxQty: 0,
-        limitReason: `Current stock in the system (${parseFloat(hmisStock.toFixed(2))} units) already covers the validated demand of ${parseFloat(maxDemand.toFixed(2))} units. No top-up is required.`,
+        limitReason: 'Current stock in the system already covers the validated demand. No top-up is required.',
       }
     }
     // Case 2: No demand signals found at all (demand = 0, no missed sales, no class D)
