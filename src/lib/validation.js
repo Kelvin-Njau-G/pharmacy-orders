@@ -89,9 +89,18 @@ export function calculateMaxQty({
   const finalQty = Math.max(demandQty, missedSalesQty, classDQty)
 
   if (finalQty === 0) {
+    // Case 1: There IS demand, but HMIS stock already covers it
+    // e.g. HMIS = 7 units, max demand = 6.8 units → no top-up needed
+    if (maxDemand > 0 && hmisStock >= maxDemand) {
+      return {
+        maxQty: 0,
+        limitReason: `Current stock in the system (${parseFloat(hmisStock.toFixed(2))} units) already covers the validated demand of ${parseFloat(maxDemand.toFixed(2))} units. No top-up is required.`,
+      }
+    }
+    // Case 2: No demand signals found at all (demand = 0, no missed sales, no class D)
     return {
       maxQty: 0,
-      limitReason: 'No validated demand or available class D stock recorded for this product at this facility.',
+      limitReason: 'No validated demand recorded for this product at this facility.',
     }
   }
 
