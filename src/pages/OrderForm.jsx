@@ -362,6 +362,25 @@ export default function OrderForm() {
         status: newStatus, submitted_at: newStatus === 'Submitted' ? now : null, total_value: total,
       }).eq('id', oid)
       if (statusErr) throw statusErr
+
+      // Fire emergency order notification (non-blocking — submission succeeds even if this fails)
+      if (newStatus === 'Submitted' && orderType === 'Emergency Order') {
+        fetch('https://afyanzima.app.n8n.cloud/webhook/emergency-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            record: {
+              id:                oid,
+              status:            'Submitted',
+              order_type:        orderType,
+              pharmacy_location: profile.pharmacy_location,
+              created_by:        profile.id,
+              order_number:      order?.order_number,
+            }
+          }),
+        }).catch(err => console.error('[Emergency order notification]', err))
+      }
+
       navigate('/dashboard')
     } catch (err) {
       setPageError('Something went wrong. Please try again.')
