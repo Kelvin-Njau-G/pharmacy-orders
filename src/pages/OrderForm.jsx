@@ -393,7 +393,7 @@ export default function OrderForm() {
       }).eq('id', oid)
       if (statusErr) throw statusErr
 
-      // Fire emergency order notification (non-blocking — submission succeeds even if this fails)
+      // Fire emergency order notification (non-blocking)
       if (newStatus === 'Submitted' && orderType === 'Emergency Order') {
         fetch('https://afyanzima.app.n8n.cloud/webhook/emergency-order', {
           method: 'POST',
@@ -409,6 +409,27 @@ export default function OrderForm() {
             }
           }),
         }).catch(err => console.error('[Emergency order notification]', err))
+      }
+
+      // Fire HMIS variance notification for any items the staff confirmed despite variance (non-blocking)
+      if (newStatus === 'Submitted') {
+        const varianceItems = items.filter(it => it._hmisConfirmed && it.sku)
+        if (varianceItems.length > 0) {
+          fetch('https://afyanzima.app.n8n.cloud/webhook/hmis-variance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              facility:    profile.pharmacy_location,
+              orderNumber: order?.order_number,
+              items: varianceItems.map(it => ({
+                sku:            it.sku,
+                product_name:   it.product_name,
+                hmis_count:     validationData?.[it.sku]?.hmisStock ?? null,
+                physical_count: parseFloat(it.current_available_stock) || 0,
+              })),
+            }),
+          }).catch(err => console.error('[HMIS variance notification]', err))
+        }
       }
 
       navigate('/dashboard')
