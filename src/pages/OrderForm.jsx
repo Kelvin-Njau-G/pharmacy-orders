@@ -209,6 +209,22 @@ export default function OrderForm() {
     })
   }
 
+  // Full re-validation for ALL items (runs on any input change)
+  function revalidateAll(updatedItems) {
+    return updatedItems.map((it, idx) => {
+      if (!it.sku || !validationData || !stockSettings) return it
+      if (!it.order_quantity || parseInt(it.order_quantity) < 1 || !it.reason_for_ordering) {
+        return { ...it, _error: null }
+      }
+      const { maxQty, limitReason } = calcMaxQtyInContext(it, updatedItems, idx)
+      const qty = parseInt(it.order_quantity) || 0
+      let error = null
+      if (maxQty === 0) error = limitReason || 'This item cannot be ordered at this time.'
+      else if (qty > maxQty) error = `Maximum approved quantity is ${maxQty} units. Please reduce to ${maxQty} or remove this product.`
+      return { ...it, _error: error }
+    })
+  }
+
   // Readable alias for render
   const getMaxQty = useCallback((it) => calcMaxQtyInContext(it, items), [validationData, stockSettings, facilityBudget, items])
 
@@ -260,8 +276,8 @@ export default function OrderForm() {
 
   function handleReasonChange(key, value) {
     setItems(prev => {
-      const base = prev.map(it => it._key === key ? { ...it, reason_for_ordering: value, _error: null } : it)
-      return revalidateDiscretionary(base)
+      const base = prev.map(it => it._key === key ? { ...it, reason_for_ordering: value } : it)
+      return revalidateAll(base)
     })
   }
 
@@ -307,19 +323,21 @@ export default function OrderForm() {
   // ── Validate before save/submit ───────────────────────────────────────────────
   function validate() {
     let ok = true
-    setItems(prev => prev.map((it, idx) => {
-      if (!it.product_name.trim()) { ok = false; return { ...it, _error: 'Product name is required.' } }
-      if (!it.order_quantity || parseInt(it.order_quantity) < 1) { ok = false; return { ...it, _error: 'Order quantity must be at least 1.' } }
-      if (!it.reason_for_ordering) { ok = false; return { ...it, _error: 'Please select a reason for ordering.' } }
-      if (it.sku && validationData && stockSettings) {
-        const { maxQty, limitReason } = calcMaxQtyInContext(it, prev, idx)
-        const qty = parseInt(it.order_quantity) || 0
-        if (maxQty === 0) { ok = false; return { ...it, _error: limitReason || 'This item cannot be ordered.' } }
-        if (qty > maxQty) { ok = false; return { ...it, _error: `Maximum approved quantity is ${maxQty} units.` } }
-      }
-      if (it._hmisVariance && !it._hmisConfirmed) { ok = false; return { ...it, _error: 'Please confirm your available stock quantity (or use the system value) to continue.' } }
-      return { ...it, _error: null }
-    }))
+    setItems(prev => {
+      // First run revalidateAll so quantity/reason errors are up-to-date
+      const revalidated = revalidateAll(prev)
+      return revalidated.map((it, idx) => {
+        // Required field checks
+        if (!it.product_name.trim()) { ok = false; return { ...it, _error: 'Product name is required.' } }
+        if (!it.order_quantity || parseInt(it.order_quantity) < 1) { ok = false; return { ...it, _error: 'Order quantity must be at least 1.' } }
+        if (!it.reason_for_ordering) { ok = false; return { ...it, _error: 'Please select a reason for ordering.' } }
+        // HMIS variance must be resolved
+        if (it._hmisVariance && !it._hmisConfirmed) { ok = false; return { ...it, _error: 'Please confirm your available stock quantity (or use the system value) to continue.' } }
+        // Preserve any validation error set by revalidateAll above
+        if (it._error) { ok = false; return it }
+        return it
+      })
+    })
     return ok
   }
 
@@ -507,6 +525,12 @@ export default function OrderForm() {
                         ? <p className="font-bold text-gray-900 text-sm">{it.product_name || '—'}</p>
                         : <ProductSearch value={it.product_name} onSelect={p => onProductSelect(it._key, p)} />
                       }
+                      {/* Guidance for manual product entry (no SKU selected from dropdown) */}
+                      {!readOnly && !it.sku && it.product_name && (
+                        <p className="mt-1 text-xs text-amber-600 leading-snug">
+                          <span className="font-semibold">Tip:</span> Include the following details in the name: active ingredient, brand name, strength, formulation, and pack size. <em>e.g. Amoxicillin (Amoxil) 500mg Capsules 21's</em>
+                        </p>
+                      )}
                       {/* Validation data hint — always shown once a product is selected and loading is complete */}
                       {it.sku && !readOnly && !validationLoading && (() => {
                         const d      = validationData?.[it.sku]
