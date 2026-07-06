@@ -244,11 +244,14 @@ export default function OrderForm() {
         return
       }
     }
-    setItems(prev => prev.map(it =>
-      it._key === key
-        ? { ...it, product_name: product.name, sku: product.sku||'', unit_price: product.unitPrice||'', _error: null }
-        : it
-    ))
+    setItems(prev => {
+      const base = prev.map(it =>
+        it._key === key
+          ? { ...it, product_name: product.name, sku: product.sku||'', unit_price: product.unitPrice||'', _error: null }
+          : it
+      )
+      return revalidateAll(base)   // re-validate with new product's SKU + existing qty/reason
+    })
   }
 
   function handleQtyChange(key, value) {
@@ -319,6 +322,15 @@ export default function OrderForm() {
   // ── Totals ───────────────────────────────────────────────────────────────────
   function lineTotal(it) { return (parseFloat(it.unit_price)||0) * (parseInt(it.order_quantity)||0) }
   function grandTotal()  { return items.reduce((s, it) => s + lineTotal(it), 0) }
+
+  // ── Submit gate: all items must be complete and error-free ────────────────────
+  const canSubmit = !saving && items.every(it =>
+    it.product_name?.trim() &&
+    it.order_quantity && parseInt(it.order_quantity) >= 1 &&
+    it.reason_for_ordering &&
+    !it._error &&
+    !(it._hmisVariance && !it._hmisConfirmed)
+  )
 
   // ── Validate before save/submit ───────────────────────────────────────────────
   function validate() {
@@ -730,10 +742,16 @@ export default function OrderForm() {
                 className="px-4 py-2.5 text-sm font-bold bg-white text-brand border border-brand/30 rounded-lg hover:bg-brand-light disabled:opacity-50">
                 {saving ? 'Saving…' : 'Save as draft'}
               </button>
-              <button onClick={() => persist('Submitted')} disabled={saving}
-                className="px-4 py-2.5 text-sm font-bold bg-brand text-white rounded-lg hover:bg-brand-dark disabled:opacity-50">
-                {saving ? 'Submitting…' : 'Submit order'}
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <button onClick={() => persist('Submitted')} disabled={!canSubmit}
+                  title={!canSubmit ? 'Fix all highlighted errors before submitting' : ''}
+                  className="px-4 py-2.5 text-sm font-bold bg-brand text-white rounded-lg hover:bg-brand-dark disabled:opacity-40 disabled:cursor-not-allowed">
+                  {saving ? 'Submitting…' : 'Submit order'}
+                </button>
+                {!canSubmit && !saving && (
+                  <p className="text-xs text-brand-red font-medium">Fix all errors before submitting</p>
+                )}
+              </div>
             </div>
           : <div className={`text-center py-4 text-sm font-semibold rounded-xl border ${
               order?.status === 'Processed'
