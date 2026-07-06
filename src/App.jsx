@@ -15,7 +15,7 @@ function RootRedirect() {
   const hash   = typeof window !== 'undefined' ? window.location.hash   : ''
   const search = typeof window !== 'undefined' ? window.location.search : ''
 
-  if (hash.includes('type=recovery')) {
+  if (hash.includes('type=recovery') || hash.includes('type=signup') || hash.includes('type=invite')) {
     return <Navigate to={`/reset-password${hash}`} replace />
   }
   // PKCE flow sends a ?code= query param instead of a hash fragment
