@@ -86,14 +86,17 @@ export default function OrderForm() {
 
   // ── Fetch out-of-stock list and flag any existing items that are OOS ────────
   useEffect(() => {
-    const SHEET_ID = import.meta.env.VITE_GOOGLE_SHEET_ID
     const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY
     const range    = encodeURIComponent('Out of Stock in the Market')
-    const url      = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
-    setOosDebug(`Fetching: .../${range}?key=${API_KEY?.slice(0,8)}…`)
+    // The OOS sheet lives in the PaaS Data Inputs spreadsheet (hardcoded ID)
+    // If VITE_GOOGLE_SHEET_ID is a different spreadsheet, it won't have this tab
+    const OOS_SHEET_ID = '1Tllagd7QxCJIKLXrx5r7WQjS-ga9rpSWr016BEuwk44'
+    const ENV_SHEET_ID = import.meta.env.VITE_GOOGLE_SHEET_ID
+    const url      = `https://sheets.googleapis.com/v4/spreadsheets/${OOS_SHEET_ID}/values/${range}?key=${API_KEY}`
+    setOosDebug(`ENV sheet: ${ENV_SHEET_ID?.slice(0,20)}… | OOS sheet: ${OOS_SHEET_ID.slice(0,20)}… | fetching…`)
     fetch(url)
       .then(r => {
-        if (!r.ok) { setOosDebug(`HTTP error ${r.status} for OOS sheet`); return null }
+        if (!r.ok) { setOosDebug(`HTTP ${r.status} — ENV sheet: ${ENV_SHEET_ID?.slice(0,20)} | OOS sheet: ${OOS_SHEET_ID.slice(0,20)}`); return null }
         return r.json()
       })
       .then(json => {

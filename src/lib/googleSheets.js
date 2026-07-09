@@ -46,46 +46,39 @@ let _oosCacheTime = null
 export async function fetchOutOfStock() {
   if (_oosCache && _oosCacheTime && Date.now() - _oosCacheTime < CACHE_MS) return _oosCache
 
-  // Try both common URL encodings for sheet names with spaces
-  // Sheet name confirmed from spreadsheet tab
-  const names = ['Out of Stock in the Market']
+  // The OOS sheet lives in the PaaS Data Inputs spreadsheet.
+  // This may differ from SHEET_ID (the product catalog spreadsheet).
+  const OOS_SHEET_ID = '1Tllagd7QxCJIKLXrx5r7WQjS-ga9rpSWr016BEuwk44'
+  const sheetName    = 'Out of Stock in the Market'
+  const range        = encodeURIComponent(sheetName)
+  const url          = `https://sheets.googleapis.com/v4/spreadsheets/${OOS_SHEET_ID}/values/${range}?key=${API_KEY}`
 
-  for (const sheetName of names) {
-    try {
-      // Wrap in single quotes (A1 notation for sheet names with spaces)
-      // Use encodeURI so single quotes are preserved but spaces become %20
-      const range = encodeURI(`'${sheetName}'`)
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
-      const res = await fetch(url)
-      if (!res.ok) {
-        console.warn(`[fetchOutOfStock] HTTP ${res.status} for sheet "${sheetName}"`)
-        continue
-      }
-
-      const json = await res.json()
-      const rows = json.values || []
-      if (rows.length < 2) { _oosCache = new Set(); _oosCacheTime = Date.now(); return _oosCache }
-
-      const headers = rows[0].map(h => (h || '').toLowerCase().trim())
-      // Try several possible SKU column names
-      let skuIdx = headers.findIndex(h => h === 'sku')
-      if (skuIdx < 0) skuIdx = headers.findIndex(h => h.includes('sku'))
-      if (skuIdx < 0) skuIdx = headers.findIndex(h => h.includes('product code') || h.includes('code'))
-      if (skuIdx < 0) skuIdx = 0  // fallback: use first column
-
-      const skus = new Set(
-        rows.slice(1)
-          .map(row => (row[skuIdx] || '').toString().trim())
-          .filter(s => s.length > 0)
-      )
-      console.log(`[fetchOutOfStock] Loaded ${skus.size} OOS SKUs. Columns: ${rows[0].join(', ')}`)
-      _oosCache = skus
-      _oosCacheTime = Date.now()
-      return skus
-    } catch (e) {
-      console.warn('[fetchOutOfStock] Attempt failed:', e.message)
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      console.warn(`[fetchOutOfStock] HTTP ${res.status}`)
+      return new Set()
     }
+    const json = await res.json()
+    const rows = json.values || []
+    if (rows.length < 2) { _oosCache = new Set(); _oosCacheTime = Date.now(); return _oosCache }
+
+    const headers = rows[0].map(h => (h || '').toLowerCase().trim())
+    let skuIdx = headers.findIndex(h => h === 'sku')
+    if (skuIdx < 0) skuIdx = headers.findIndex(h => h.includes('sku'))
+    if (skuIdx < 0) skuIdx = 0
+
+    const skus = new Set(
+      rows.slice(1)
+        .map(row => (row[skuIdx] || '').toString().trim())
+        .filter(s => s.length > 0)
+    )
+    console.log(`[fetchOutOfStock] Loaded ${skus.size} OOS SKUs. Headers: ${rows[0].join(', ')}`)
+    _oosCache     = skus
+    _oosCacheTime = Date.now()
+    return skus
+  } catch (e) {
+    console.warn('[fetchOutOfStock] Error:', e.message)
+    return new Set()
   }
-  console.warn('[fetchOutOfStock] Could not load out-of-stock sheet. OOS check disabled.')
-  return new Set()
 }
