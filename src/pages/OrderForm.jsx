@@ -88,7 +88,7 @@ export default function OrderForm() {
   useEffect(() => {
     const SHEET_ID = import.meta.env.VITE_GOOGLE_SHEET_ID
     const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY
-    const range    = encodeURI("'Out of Stock in the Market'")
+    const range    = encodeURIComponent('Out of Stock in the Market')
     const url      = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
     setOosDebug(`Fetching: .../${range}?key=${API_KEY?.slice(0,8)}…`)
     fetch(url)
