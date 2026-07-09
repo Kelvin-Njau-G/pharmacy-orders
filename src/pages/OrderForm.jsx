@@ -68,6 +68,7 @@ export default function OrderForm() {
   const [viewMode,     setViewMode]     = useState('edit')  // 'edit' | 'list'
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [outOfStockSkus, setOutOfStockSkus] = useState(new Set())
+  const [oosDebug,       setOosDebug]       = useState('Loading OOS list…')
   const [pageError, setPageError] = useState(null)
 
   // Validation data
@@ -85,7 +86,29 @@ export default function OrderForm() {
 
   // ── Fetch out-of-stock list and flag any existing items that are OOS ────────
   useEffect(() => {
-    fetchOutOfStock().then(setOutOfStockSkus).catch(() => {})
+    const SHEET_ID = import.meta.env.VITE_GOOGLE_SHEET_ID
+    const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY
+    const range    = encodeURI("'Out of Stock in the Market'")
+    const url      = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
+    setOosDebug(`Fetching: .../${range}?key=${API_KEY?.slice(0,8)}…`)
+    fetch(url)
+      .then(r => {
+        if (!r.ok) { setOosDebug(`HTTP error ${r.status} for OOS sheet`); return null }
+        return r.json()
+      })
+      .then(json => {
+        if (!json) return
+        const rows = json.values || []
+        if (rows.length < 2) { setOosDebug(`OOS sheet returned ${rows.length} rows (empty?)`); return }
+        const headers = rows[0].map(h => (h||'').toLowerCase().trim())
+        let skuIdx = headers.findIndex(h => h === 'sku')
+        if (skuIdx < 0) skuIdx = headers.findIndex(h => h.includes('sku'))
+        if (skuIdx < 0) skuIdx = 0
+        const skus = new Set(rows.slice(1).map(r => (r[skuIdx]||'').toString().trim()).filter(Boolean))
+        setOutOfStockSkus(skus)
+        setOosDebug(`OOS: ${skus.size} SKUs loaded. Headers: [${rows[0].join(', ')}]. PHAZ015 in set: ${skus.has('PHAZ015')}`)
+      })
+      .catch(e => setOosDebug(`OOS fetch error: ${e.message}`))
   }, [])
 
   useEffect(() => {
@@ -535,6 +558,12 @@ export default function OrderForm() {
         {validationError && !readOnly && (
           <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium">
             ⚠ {validationError}
+          </div>
+        )}
+        {/* TEMPORARY DEBUG — remove after OOS is confirmed working */}
+        {!readOnly && (
+          <div className="mb-4 bg-gray-100 border border-gray-300 rounded-xl px-4 py-2 text-xs text-gray-600 font-mono break-all">
+            🔍 OOS debug: {oosDebug}
           </div>
         )}
 
