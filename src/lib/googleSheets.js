@@ -47,16 +47,20 @@ export async function fetchOutOfStock() {
   if (_oosCache && _oosCacheTime && Date.now() - _oosCacheTime < CACHE_MS) return _oosCache
 
   // Try both common URL encodings for sheet names with spaces
-  const names = [
-    'Out of Stock in the Market',
-    'Out+of+Stock+in+the+Market',
-  ]
+  // Sheet name confirmed from spreadsheet tab
+  const names = ['Out of Stock in the Market']
 
   for (const sheetName of names) {
     try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName)}?key=${API_KEY}`
+      // Wrap in single quotes (A1 notation for sheet names with spaces)
+      // Use encodeURI so single quotes are preserved but spaces become %20
+      const range = encodeURI(`'${sheetName}'`)
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`
       const res = await fetch(url)
-      if (!res.ok) continue
+      if (!res.ok) {
+        console.warn(`[fetchOutOfStock] HTTP ${res.status} for sheet "${sheetName}"`)
+        continue
+      }
 
       const json = await res.json()
       const rows = json.values || []
