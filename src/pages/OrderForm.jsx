@@ -68,7 +68,6 @@ export default function OrderForm() {
   const [viewMode,     setViewMode]     = useState('edit')  // 'edit' | 'list'
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [outOfStockSkus, setOutOfStockSkus] = useState(new Set())
-  const [oosDebug,       setOosDebug]       = useState('Loading OOS list…')
   const [pageError, setPageError] = useState(null)
 
   // Validation data
@@ -84,34 +83,9 @@ export default function OrderForm() {
   const [dragKey,     setDragKey]     = useState(null)
   const [dragOverKey, setDragOverKey] = useState(null)
 
-  // ── Fetch out-of-stock list and flag any existing items that are OOS ────────
+  // ── Fetch out-of-stock list ─────────────────────────────────────────────────
   useEffect(() => {
-    const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY
-    const range    = encodeURIComponent('Out of Stock in the Market')
-    // The OOS sheet lives in the PaaS Data Inputs spreadsheet (hardcoded ID)
-    // If VITE_GOOGLE_SHEET_ID is a different spreadsheet, it won't have this tab
-    const OOS_SHEET_ID = '1Tllagd7QxCJIKLXrx5r7WQjS-ga9rpSWr016BEuwk44'
-    const ENV_SHEET_ID = import.meta.env.VITE_GOOGLE_SHEET_ID
-    const url      = `https://sheets.googleapis.com/v4/spreadsheets/${OOS_SHEET_ID}/values/${range}?key=${API_KEY}`
-    setOosDebug(`ENV sheet: ${ENV_SHEET_ID?.slice(0,20)}… | OOS sheet: ${OOS_SHEET_ID.slice(0,20)}… | fetching…`)
-    fetch(url)
-      .then(r => {
-        if (!r.ok) { setOosDebug(`HTTP ${r.status} — ENV sheet: ${ENV_SHEET_ID?.slice(0,20)} | OOS sheet: ${OOS_SHEET_ID.slice(0,20)}`); return null }
-        return r.json()
-      })
-      .then(json => {
-        if (!json) return
-        const rows = json.values || []
-        if (rows.length < 2) { setOosDebug(`OOS sheet returned ${rows.length} rows (empty?)`); return }
-        const headers = rows[0].map(h => (h||'').toLowerCase().trim())
-        let skuIdx = headers.findIndex(h => h === 'sku')
-        if (skuIdx < 0) skuIdx = headers.findIndex(h => h.includes('sku'))
-        if (skuIdx < 0) skuIdx = 0
-        const skus = new Set(rows.slice(1).map(r => (r[skuIdx]||'').toString().trim()).filter(Boolean))
-        setOutOfStockSkus(skus)
-        setOosDebug(`OOS: ${skus.size} SKUs loaded. Headers: [${rows[0].join(', ')}]. PHAZ015 in set: ${skus.has('PHAZ015')}`)
-      })
-      .catch(e => setOosDebug(`OOS fetch error: ${e.message}`))
+    fetchOutOfStock().then(setOutOfStockSkus).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -130,6 +104,8 @@ export default function OrderForm() {
     if (!validationData || !stockSettings || readOnly) return
     setItems(prev => prev.map((it, idx) => {
       if (!it.sku) return it
+      // OOS takes priority — never let auto-validate clear OOS error
+      if (outOfStockSkus.has(it.sku)) return { ...it, _error: `${it.product_name} is currently out of stock in the market and cannot be ordered.` }
 
       // Qty / demand validation
       let error = null
@@ -266,7 +242,9 @@ export default function OrderForm() {
   // Re-validate every discretionary item after any order change
   function revalidateDiscretionary(updatedItems) {
     return updatedItems.map((it, idx) => {
-      if (!it.sku || !validationData || !stockSettings) return it
+      if (!it.sku) return it
+      if (outOfStockSkus.has(it.sku)) return { ...it, _error: `${it.product_name} is currently out of stock in the market and cannot be ordered.` }
+      if (!validationData || !stockSettings) return it
       if (it.reason_for_ordering !== 'Pharmtech/Clinician Request' && it.reason_for_ordering !== 'Specific Brand') return it
       const { maxQty, limitReason } = calcMaxQtyInContext(it, updatedItems, idx)
       const qty = parseInt(it.order_quantity) || 0
@@ -280,7 +258,9 @@ export default function OrderForm() {
   // Full re-validation for ALL items (runs on any input change)
   function revalidateAll(updatedItems) {
     return updatedItems.map((it, idx) => {
-      if (!it.sku || !validationData || !stockSettings) return it
+      if (!it.sku) return it
+      if (outOfStockSkus.has(it.sku)) return { ...it, _error: `${it.product_name} is currently out of stock in the market and cannot be ordered.` }
+      if (!validationData || !stockSettings) return it
       if (!it.order_quantity || parseInt(it.order_quantity) < 1 || !it.reason_for_ordering) {
         return { ...it, _error: null }
       }
@@ -337,6 +317,8 @@ export default function OrderForm() {
       const base = prev.map(it => it._key === key ? { ...it, order_quantity: value } : it)
       const idx  = base.findIndex(i => i._key === key)
       const it   = base[idx]
+      // OOS takes priority — qty changes cannot clear the OOS error
+      if (it.sku && outOfStockSkus.has(it.sku)) return revalidateDiscretionary(base)
       const qty  = parseInt(value) || 0
       const { maxQty, limitReason } = calcMaxQtyInContext(it, base, idx)
       let error = null
@@ -417,6 +399,11 @@ export default function OrderForm() {
       // First run revalidateAll so quantity/reason errors are up-to-date
       const revalidated = revalidateAll(prev)
       return revalidated.map((it, idx) => {
+        // OOS check first — these items can only be removed, not submitted
+        if (it.sku && outOfStockSkus.has(it.sku)) {
+          ok = false
+          return { ...it, _error: `${it.product_name} is currently out of stock in the market and cannot be ordered.` }
+        }
         // Required field checks
         if (!it.product_name.trim()) { ok = false; return { ...it, _error: 'Product name is required.' } }
         if (!it.order_quantity || parseInt(it.order_quantity) < 1) { ok = false; return { ...it, _error: 'Order quantity must be at least 1.' } }
@@ -563,12 +550,7 @@ export default function OrderForm() {
             ⚠ {validationError}
           </div>
         )}
-        {/* TEMPORARY DEBUG — remove after OOS is confirmed working */}
-        {!readOnly && (
-          <div className="mb-4 bg-gray-100 border border-gray-300 rounded-xl px-4 py-2 text-xs text-gray-600 font-mono break-all">
-            🔍 OOS debug: {oosDebug}
-          </div>
-        )}
+
 
         {/* Order type */}
         <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
