@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
@@ -76,6 +76,8 @@ export default function OrderForm() {
   const [facilityBudget,    setFacilityBudget]    = useState(2000)
   const [validationLoading, setValidationLoading] = useState(false)
   const [validationError,   setValidationError]   = useState(null)
+  const [validationRetrying, setValidationRetrying] = useState(false)
+  const [validationRetryCount, setValidationRetryCount] = useState(0)
 
   // Drag-and-drop state
   const [dragKey,     setDragKey]     = useState(null)
@@ -149,6 +151,7 @@ export default function OrderForm() {
   useEffect(() => {
     if (!profile || readOnly) return
     if (isNew || (order && order.status === 'Draft')) loadValidation()
+    return () => { if (validationRetryTimerRef.current) clearTimeout(validationRetryTimerRef.current) }
   }, [profile, order?.id, readOnly])
 
   async function load() {
@@ -168,8 +171,12 @@ export default function OrderForm() {
     setLoading(false)
   }
 
-  async function loadValidation() {
-    setValidationLoading(true); setValidationError(null)
+  const validationRetryTimerRef = useRef(null)
+  const MAX_VALIDATION_RETRIES = 5
+  const VALIDATION_RETRY_MS    = 2 * 60 * 1000  // 2 minutes
+
+  async function loadValidation(retryCount = 0) {
+    setValidationLoading(true); setValidationError(null); setValidationRetrying(retryCount > 0)
     try {
       const [settingsRes, facilityRes, validationRes] = await Promise.all([
         supabase.from('stock_settings').select('*').limit(1).single(),
@@ -179,10 +186,24 @@ export default function OrderForm() {
       ])
       if (settingsRes.data)    setStockSettings(settingsRes.data)
       if (facilityRes.data)    setFacilityBudget(facilityRes.data.discretionary_budget ?? 2000)
-      if (validationRes.items) setValidationData(validationRes.items)
-      if (validationRes.error) setValidationError(validationRes.error)
+      if (validationRes.items) {
+        setValidationData(validationRes.items)
+        setValidationRetrying(false)
+        setValidationRetryCount(0)
+      } else if (validationRes.error) {
+        throw new Error(validationRes.error)
+      }
     } catch {
-      setValidationError('Could not load validation data. Quantity limits will not be enforced.')
+      if (retryCount < MAX_VALIDATION_RETRIES) {
+        const next = retryCount + 1
+        setValidationRetryCount(next)
+        setValidationError(`Validation data unavailable — retrying in 2 minutes… (attempt ${next}/${MAX_VALIDATION_RETRIES})`)
+        setValidationRetrying(true)
+        validationRetryTimerRef.current = setTimeout(() => loadValidation(next), VALIDATION_RETRY_MS)
+      } else {
+        setValidationError('Could not load validation data after several attempts. Quantity limits will not be enforced.')
+        setValidationRetrying(false)
+      }
     } finally { setValidationLoading(false) }
   }
 
@@ -485,10 +506,10 @@ export default function OrderForm() {
               </div>
             )}
           </div>
-          {validationLoading && !readOnly && (
+          {(validationLoading || validationRetrying) && !readOnly && (
             <div className="flex items-center gap-2 text-xs text-gray-400 font-medium">
               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-brand" />
-              Loading validation data…
+              {validationRetrying ? 'Retrying validation data…' : 'Loading validation data…'}
             </div>
           )}
         </div>
@@ -599,7 +620,7 @@ export default function OrderForm() {
                 <p className="text-xs text-gray-400 mt-0.5 font-medium">Drag ⠿ to reorder — position controls discretionary budget priority</p>
               )}
             </div>
-            {!readOnly && (
+            {!readOnly && viewMode === 'edit' && (
               <button onClick={addItem} className="text-sm text-brand hover:text-brand-dark font-bold">+ Add product</button>
             )}
           </div>
@@ -657,6 +678,22 @@ export default function OrderForm() {
                           <span className="font-semibold">Tip:</span> Include the following details in the name: active ingredient, brand name, strength, formulation, and pack size. <em>e.g. Amoxicillin (Amoxil) 500mg Capsules 21's</em>
                         </p>
                       )}
+                      {/* Required fields alert — shown when item has partial data or after submit attempt */}
+                      {!readOnly && (() => {
+                        const hasPartialData = !!(it.product_name || it.order_quantity || it.reason_for_ordering)
+                        const showReqWarning = submitAttempted || hasPartialData
+                        if (!showReqWarning) return null
+                        const missing = []
+                        if (!it.product_name?.trim()) missing.push('product name')
+                        if (!it.order_quantity || parseInt(it.order_quantity) < 1) missing.push('quantity ordered')
+                        if (!it.reason_for_ordering) missing.push('reason for ordering')
+                        if (missing.length === 0) return null
+                        return (
+                          <div className="mt-1 mb-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 font-medium">
+                            ⚠ Required fields missing: {missing.join(', ')}
+                          </div>
+                        )
+                      })()}
                       {/* Validation data hint — always shown once a product is selected and loading is complete */}
                       {it.sku && !readOnly && !validationLoading && (() => {
                         const d      = validationData?.[it.sku]
