@@ -39,3 +39,34 @@ export async function fetchProducts() {
   _cacheTime = Date.now()
   return products
 }
+
+let _oosCache = null
+let _oosCacheTime = null
+
+export async function fetchOutOfStock() {
+  if (_oosCache && _oosCacheTime && Date.now() - _oosCacheTime < CACHE_MS) return _oosCache
+
+  const sheetName = encodeURIComponent('Out of Stock in the Market')
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${sheetName}?key=${API_KEY}`
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return new Set()
+    const json = await res.json()
+    const rows = json.values || []
+    if (rows.length < 2) return new Set()
+
+    const headers = rows[0].map(h => (h || '').toLowerCase().trim())
+    const skuIdx  = headers.findIndex(h => h.includes('sku'))
+    if (skuIdx < 0) return new Set()
+
+    const skus = new Set(
+      rows.slice(1)
+        .filter(row => row[skuIdx])
+        .map(row => (row[skuIdx] || '').trim())
+    )
+    _oosCache = skus
+    _oosCacheTime = Date.now()
+    return skus
+  } catch { return new Set() }
+}

@@ -1,16 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import logo from '../assets/afyanzima-icon.png'
 import { useAuth } from '../contexts/AuthContext'
 
 function AfyaNzimaIcon({ size = 56 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <polygon points="20,2 37,11.5 37,28.5 20,38 3,28.5 3,11.5" fill="#E63323"/>
-      <rect x="16.5" y="10" width="7" height="19" rx="1.5" fill="white"/>
-      <rect x="10" y="16.5" width="20" height="7" rx="1.5" fill="white"/>
-      <path d="M 9 33 Q 14.5 37.5 20 36 Q 25.5 37.5 31 33" stroke="white" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
-    </svg>
-  )
+  return <img src={logo} alt="AfyaNzima" style={{ height: size, width: 'auto' }} />
 }
 
 function EyeIcon() {

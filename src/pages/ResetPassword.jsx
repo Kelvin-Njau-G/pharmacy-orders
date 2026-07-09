@@ -71,7 +71,7 @@ export default function ResetPassword() {
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
-    if (password.length < 6) { setError('Password must be at least 6 characters.'); return }
+    if (password.length < 4) { setError('Password must be at least 4 characters.'); return }
     if (password !== confirm)  { setError('Passwords do not match.'); return }
 
     setLoading(true)
@@ -136,7 +136,7 @@ export default function ResetPassword() {
                     required autoComplete="new-password" autoFocus
                     className="w-full px-3.5 py-2.5 pr-10 border border-gray-300 rounded-lg text-sm
                       focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="At least 6 characters"
+                    placeholder="At least 4 characters"
                   />
                   <button type="button" onClick={() => setShowPw(v => !v)}
                     className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">

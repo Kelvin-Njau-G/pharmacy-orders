@@ -10,7 +10,6 @@ function fmt(amount) {
     style: 'currency', currency: 'KES', minimumFractionDigits: 0,
   }).format(amount)
 }
-
 function fmtDate(str) {
   if (!str) return '—'
   return new Date(str).toLocaleDateString('en-KE', {
@@ -24,7 +23,6 @@ export default function Dashboard() {
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
 
-  // Admins have no business on the staff dashboard — redirect them to their console
   useEffect(() => {
     if (!authLoading && isAdmin) navigate('/admin', { replace: true })
   }, [isAdmin, authLoading])
@@ -43,9 +41,16 @@ export default function Dashboard() {
     setLoading(false)
   }
 
-  const hasActive   = orders.some(o => o.status !== 'Processed')
-  const canCreate   = !hasActive
-  const activeOrder = orders.find(o => o.status === 'Draft' || o.status === 'Submitted')
+  // Emergency orders: always allowed
+  // Supplementary orders: only 1 active (Draft or Submitted) at a time
+  const activeSupplementary = orders.find(
+    o => o.order_type === 'Supplementary Order' && (o.status === 'Draft' || o.status === 'Submitted')
+  )
+  const canCreateSupplementary = !activeSupplementary
+
+  function newOrder(orderType) {
+    navigate('/orders/new', { state: { orderType } })
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -57,17 +62,33 @@ export default function Dashboard() {
             <p className="text-sm text-gray-400 mt-0.5 font-medium">{profile?.pharmacy_location}</p>
           </div>
           <div className="flex items-center gap-3">
-            {activeOrder && (
-              <Link to={`/orders/${activeOrder.id}`}
+            {activeSupplementary && (
+              <Link to={`/orders/${activeSupplementary.id}`}
                 className="text-sm text-brand hover:text-brand-dark font-bold border border-brand/30
                   px-3.5 py-2 rounded-lg hover:bg-brand-light transition-colors">
-                Continue active order →
+                Continue supplementary order →
               </Link>
             )}
+
+            {/* Emergency Order — always enabled */}
             <button
-              onClick={() => navigate('/orders/new')}
-              disabled={!canCreate}
-              title={!canCreate ? 'Your current order must be processed before creating a new one.' : ''}
+              onClick={() => newOrder('Emergency Order')}
+              className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white
+                text-sm font-bold px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Emergency Order
+            </button>
+
+            {/* Supplementary Order — disabled when one is already active */}
+            <button
+              onClick={() => newOrder('Supplementary Order')}
+              disabled={!canCreateSupplementary}
+              title={!canCreateSupplementary
+                ? 'Your current supplementary order must be processed before creating a new one.'
+                : 'Create a new supplementary order'}
               className="inline-flex items-center gap-2 bg-brand hover:bg-brand-dark text-white
                 text-sm font-bold px-4 py-2.5 rounded-lg transition-colors
                 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -75,14 +96,14 @@ export default function Dashboard() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              New order
+              Supplementary Order
             </button>
           </div>
         </div>
 
-        {!canCreate && (
+        {!canCreateSupplementary && (
           <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700 font-medium">
-            You have an active order in progress. It must be <strong>processed</strong> by the admin before you can create a new one.
+            You have an active supplementary order in progress. It must be <strong>processed</strong> by the admin before you can create a new one. Emergency orders can still be created at any time.
           </div>
         )}
 

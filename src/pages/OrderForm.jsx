@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { calculateMaxQty, checkHmisVariance } from '../lib/validation'
+import { fetchOutOfStock } from '../lib/googleSheets'
 import Navbar from '../components/Navbar'
 import StatusBadge from '../components/StatusBadge'
 import ProductSearch from '../components/ProductSearch'
@@ -54,14 +55,19 @@ const DragHandle = () => (
 export default function OrderForm() {
   const { id }   = useParams()
   const isNew    = id === 'new'
-  const navigate = useNavigate()
+  const navigate   = useNavigate()
+  const location   = useLocation()
+  const prefilledType = location.state?.orderType || null
   const { profile, isAdmin } = useAuth()
 
   const [order,     setOrder]     = useState(null)
-  const [orderType, setOrderType] = useState('')
+  const [orderType, setOrderType] = useState(prefilledType || '')
   const [items,     setItems]     = useState([{ ...BLANK_ITEM, _key: 1 }])
   const [loading,   setLoading]   = useState(!isNew)
-  const [saving,    setSaving]    = useState(false)
+  const [saving,       setSaving]       = useState(false)
+  const [viewMode,     setViewMode]     = useState('edit')  // 'edit' | 'list'
+  const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [outOfStockSkus, setOutOfStockSkus] = useState(new Set())
   const [pageError, setPageError] = useState(null)
 
   // Validation data
@@ -235,6 +241,16 @@ export default function OrderForm() {
   }
 
   function onProductSelect(key, product) {
+    // Block products that are out of stock in the market
+    if (product.sku && outOfStockSkus.has(product.sku)) {
+      setItems(prev => prev.map(it =>
+        it._key === key
+          ? { ...it, product_name: product.name, sku: product.sku, unit_price: product.unitPrice||'',
+              _error: `${product.name} is currently out of stock in the market and cannot be ordered.` }
+          : it
+      ))
+      return
+    }
     if (product.sku) {
       const dup = items.some(it => it._key !== key && it.sku && it.sku === product.sku)
       if (dup) {
@@ -250,7 +266,7 @@ export default function OrderForm() {
           ? { ...it, product_name: product.name, sku: product.sku||'', unit_price: product.unitPrice||'', _error: null }
           : it
       )
-      return revalidateAll(base)   // re-validate with new product's SKU + existing qty/reason
+      return revalidateAll(base)
     })
   }
 
@@ -355,6 +371,7 @@ export default function OrderForm() {
 
   // ── Persist ───────────────────────────────────────────────────────────────────
   async function persist(newStatus) {
+    if (newStatus === 'Submitted') setSubmitAttempted(true)
     if (!orderType) { setPageError('Please select an order type.'); return }
     if (!validate()) { setPageError('Please fix the highlighted errors below.'); return }
     setPageError(null); setSaving(true)
@@ -490,15 +507,88 @@ export default function OrderForm() {
           <label className="block text-sm font-bold text-gray-700 mb-2">Order type</label>
           {readOnly
             ? <p className="text-sm font-semibold text-gray-800">{orderType}</p>
-            : <select value={orderType} onChange={e => setOrderType(e.target.value)}
-                className="px-3.5 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-                <option value="">Select order type…</option>
-                {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+            : (prefilledType && isNew)
+              ? <p className="text-sm font-semibold text-gray-800 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">{orderType}</p>
+              : <select value={orderType} onChange={e => setOrderType(e.target.value)}
+                  className="px-3.5 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
+                  <option value="">Select order type…</option>
+                  {ORDER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
           }
         </div>
 
         {/* Items */}
+        {/* View mode toggle — Edit vs List */}
+        {!readOnly && items.length > 0 && (
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+              {items.length} item{items.length !== 1 ? 's' : ''}
+            </p>
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs font-bold">
+              <button type="button" onClick={() => setViewMode('edit')}
+                className={`px-3 py-1.5 transition-colors ${viewMode === 'edit'
+                  ? 'bg-brand text-white' : 'text-gray-500 bg-white hover:bg-gray-50'}`}>
+                ✏ Edit View
+              </button>
+              <button type="button" onClick={() => setViewMode('list')}
+                className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${viewMode === 'list'
+                  ? 'bg-brand text-white' : 'text-gray-500 bg-white hover:bg-gray-50'}`}>
+                ☰ List View
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── List View ───────────────────────────────────────────────────────── */}
+        {viewMode === 'list' && !readOnly && items.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="px-3 py-2.5 text-left text-xs font-extrabold text-gray-500 uppercase tracking-wider w-8">#</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-extrabold text-gray-500 uppercase tracking-wider">Product Name</th>
+                  <th className="px-3 py-2.5 text-center text-xs font-extrabold text-gray-500 uppercase tracking-wider w-20">Qty</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-extrabold text-gray-500 uppercase tracking-wider w-28">Unit Price</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-extrabold text-gray-500 uppercase tracking-wider w-28">Line Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {items.map((it, idx) => (
+                  <tr key={it._key} className={`hover:bg-gray-50 ${it._error ? 'bg-red-50' : ''}`}>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{idx + 1}</td>
+                    <td className="px-3 py-2">
+                      <span className="font-medium text-gray-800 text-xs leading-snug">
+                        {it.product_name || <span className="text-gray-300 italic">No product selected</span>}
+                      </span>
+                      {it.sku && <span className="block text-xs text-gray-400">{it.sku}</span>}
+                      {it._error && <span className="block text-xs text-red-500 mt-0.5">{it._error}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-center text-gray-700 font-bold text-xs">{it.order_quantity || '—'}</td>
+                    <td className="px-3 py-2 text-right text-gray-600 text-xs">
+                      {it.unit_price ? `KES ${parseFloat(it.unit_price).toFixed(2)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right font-bold text-gray-800 text-xs">
+                      {it.unit_price && it.order_quantity
+                        ? `KES ${lineTotal(it).toFixed(2)}`
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-gray-200 bg-gray-50">
+                  <td colSpan={4} className="px-3 py-2.5 text-xs font-extrabold text-gray-700 text-right uppercase tracking-wide">Order Total</td>
+                  <td className="px-3 py-2.5 text-right font-extrabold text-gray-900 text-sm">KES {grandTotal().toFixed(2)}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p className="text-center text-xs text-gray-400 py-2 border-t border-gray-100">
+              Switch to <button type="button" onClick={() => setViewMode('edit')} className="text-brand font-bold hover:underline">Edit View</button> to make changes
+            </p>
+          </div>
+        )}
+
+
         <div className="bg-white rounded-2xl border border-gray-200 mb-4">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
@@ -515,7 +605,7 @@ export default function OrderForm() {
           </div>
 
           <div className="p-4 space-y-3">
-            {items.map((it, idx) => {
+            {viewMode === 'edit' && items.map((it, idx) => {
               const maxQtyInfo = (!readOnly && it.sku && validationData && stockSettings)
                 ? getMaxQty(it) : { maxQty: Infinity, limitReason: null }
               const isDragging  = dragKey     === it._key
@@ -558,6 +648,9 @@ export default function OrderForm() {
                         ? <p className="font-bold text-gray-900 text-sm">{it.product_name || '—'}</p>
                         : <ProductSearch value={it.product_name} onSelect={p => onProductSelect(it._key, p)} />
                       }
+                      {submitAttempted && !it.product_name && (
+                        <p className="mt-1 text-xs text-red-500 font-medium">Product is required</p>
+                      )}
                       {/* Guidance for manual product entry (no SKU selected from dropdown) */}
                       {!readOnly && !it.sku && it.product_name && (
                         <p className="mt-1 text-xs text-amber-600 leading-snug">
@@ -700,7 +793,10 @@ export default function OrderForm() {
 
                     {/* Reason */}
                     <div>
-                      <label className="block text-xs font-extrabold text-gray-400 mb-1.5 uppercase tracking-wide">Reason for ordering</label>
+                      <label className={`block text-xs font-extrabold mb-1.5 uppercase tracking-wide ${
+                        submitAttempted && !it.reason_for_ordering ? 'text-red-500' : 'text-gray-400'}`}>
+                        Reason for ordering <span className="text-red-400">*</span>
+                      </label>
                       {readOnly
                         ? <p className="text-sm text-gray-700 font-medium">{it.reason_for_ordering || '—'}</p>
                         : <select value={it.reason_for_ordering}
@@ -745,9 +841,26 @@ export default function OrderForm() {
                 </button>
               : <div />
             }
-            <div className="text-right">
-              <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
-              <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
+            <div className="flex items-center gap-4">
+              {/* Bottom view toggle */}
+              {!readOnly && items.length > 0 && (
+                <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs font-bold">
+                  <button type="button" onClick={() => setViewMode('edit')}
+                    className={`px-3 py-1.5 transition-colors ${viewMode === 'edit'
+                      ? 'bg-brand text-white' : 'text-gray-500 bg-white hover:bg-gray-50'}`}>
+                    ✏ Edit
+                  </button>
+                  <button type="button" onClick={() => setViewMode('list')}
+                    className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${viewMode === 'list'
+                      ? 'bg-brand text-white' : 'text-gray-500 bg-white hover:bg-gray-50'}`}>
+                    ☰ List
+                  </button>
+                </div>
+              )}
+              <div className="text-right">
+                <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-0.5">Order total</p>
+                <p className="text-2xl font-extrabold text-gray-900">{fmt(grandTotal())}</p>
+              </div>
             </div>
           </div>
         </div>
