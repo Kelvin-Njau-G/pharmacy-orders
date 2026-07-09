@@ -83,6 +83,21 @@ export default function OrderForm() {
   const [dragKey,     setDragKey]     = useState(null)
   const [dragOverKey, setDragOverKey] = useState(null)
 
+  // ── Fetch out-of-stock list and flag any existing items that are OOS ────────
+  useEffect(() => {
+    fetchOutOfStock().then(setOutOfStockSkus).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (outOfStockSkus.size === 0 || readOnly) return
+    setItems(prev => prev.map(it => {
+      if (it.sku && outOfStockSkus.has(it.sku)) {
+        return { ...it, _error: `${it.product_name} is currently out of stock in the market and cannot be ordered.` }
+      }
+      return it
+    }))
+  }, [outOfStockSkus])
+
   // Auto-validate all items once validation data loads, so amber errors appear
   // immediately on an existing draft order without requiring user interaction.
   useEffect(() => {
@@ -528,7 +543,7 @@ export default function OrderForm() {
           <label className="block text-sm font-bold text-gray-700 mb-2">Order type</label>
           {readOnly
             ? <p className="text-sm font-semibold text-gray-800">{orderType}</p>
-            : (prefilledType && isNew)
+            : (order?.id || prefilledType)
               ? <p className="text-sm font-semibold text-gray-800 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">{orderType}</p>
               : <select value={orderType} onChange={e => setOrderType(e.target.value)}
                   className="px-3.5 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
