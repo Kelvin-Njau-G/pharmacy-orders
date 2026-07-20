@@ -93,7 +93,9 @@ export default function AdminConsole() {
   async function createStaff() {
     setStaffMsg({ type:null, text:'' })
     const { email, name, location, role, password } = staffForm
-    if (!email || !name || !location || !password) {
+    // Admins get 'Head Office' as their location automatically
+    const effectiveLocation = role === 'admin' ? 'Head Office' : location
+    if (!email || !name || !effectiveLocation || !password) {
       setStaffMsg({ type:'error', text:'Please fill in all fields.' }); return
     }
     if (password.length < 6) {
@@ -106,7 +108,7 @@ export default function AdminConsole() {
     if (authErr) { setStaffMsg({ type:'error', text:authErr.message }); setStaffBusy(false); return }
     if (authData.user) {
       const { error } = await supabase.from('profiles').upsert({
-        id: authData.user.id, full_name: name, pharmacy_location: location, role,
+        id: authData.user.id, full_name: name, pharmacy_location: effectiveLocation, role,
       })
       if (error) { setStaffMsg({ type:'error', text:error.message }); setStaffBusy(false); return }
     }
@@ -312,15 +314,21 @@ export default function AdminConsole() {
                   <Field label="Temp. password" value={staffForm.password} onChange={v => setStaffForm(f=>({...f,password:v}))} placeholder="Min. 6 characters" />
                   <div>
                     <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Location</label>
-                    <select value={staffForm.location} onChange={e => setStaffForm(f=>({...f,location:e.target.value}))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-                      <option value="">Select facility…</option>
-                      {facilities.map(fac => <option key={fac.id} value={fac.name}>{fac.name}</option>)}
-                    </select>
+                    {staffForm.role === 'admin'
+                      ? <p className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium bg-gray-50 text-gray-500">Head Office</p>
+                      : <select value={staffForm.location} onChange={e => setStaffForm(f=>({...f,location:e.target.value}))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
+                          <option value="">Select facility…</option>
+                          {facilities.map(fac => <option key={fac.id} value={fac.name}>{fac.name}</option>)}
+                        </select>
+                    }
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Role</label>
-                    <select value={staffForm.role} onChange={e => setStaffForm(f=>({...f,role:e.target.value}))}
+                    <select value={staffForm.role} onChange={e => {
+                        const r = e.target.value
+                        setStaffForm(f => ({ ...f, role: r, location: r === 'admin' ? 'Head Office' : f.location }))
+                      }}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
                       <option value="staff">Staff</option>
                       <option value="admin">Admin</option>
