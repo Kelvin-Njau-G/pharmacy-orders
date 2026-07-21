@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 
 function EyeIcon() {
   return (
@@ -75,10 +76,16 @@ export default function ResetPassword() {
     if (password !== confirm)  { setError('Passwords do not match.'); return }
 
     setLoading(true)
-    const { error } = await supabase.auth.updateUser({ password })
-    setLoading(false)
+    const { data: updateData, error } = await supabase.auth.updateUser({ password })
+    if (error) { setLoading(false); setError(error.message); return }
 
-    if (error) { setError(error.message); return }
+    // Clear the must_change_password flag if it was set (first-login flow)
+    if (updateData?.user?.id) {
+      await supabase.from('profiles')
+        .update({ must_change_password: false })
+        .eq('id', updateData.user.id)
+    }
+    setLoading(false)
     navigate('/dashboard', { replace: true })
   }
 

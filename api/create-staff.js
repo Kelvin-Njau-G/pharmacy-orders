@@ -32,6 +32,7 @@ export default async function handler(req, res) {
     full_name: name,
     pharmacy_location: location,
     role,
+    must_change_password: true,
   })
 
   if (profileErr) return res.status(400).json({ error: profileErr.message })

@@ -58,6 +58,7 @@ export function AuthProvider({ children }) {
       user, profile, loading,
       signIn, signOut,
       isAdmin: profile?.role === 'admin',
+      mustChangePassword: profile?.must_change_password === true,
     }}>
       {children}
     </AuthContext.Provider>
