@@ -102,15 +102,16 @@ export default function AdminConsole() {
       setStaffMsg({ type:'error', text:'Password must be at least 6 characters.' }); return
     }
     setStaffBusy(true)
-    const { data: authData, error: authErr } = await supabase.auth.signUp({
-      email, password, options: { data: { full_name: name } },
-    })
-    if (authErr) { setStaffMsg({ type:'error', text:authErr.message }); setStaffBusy(false); return }
-    if (authData.user) {
-      const { error } = await supabase.from('profiles').upsert({
-        id: authData.user.id, full_name: name, pharmacy_location: effectiveLocation, role,
+    try {
+      const res = await fetch('/api/create-staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name, location: effectiveLocation, role }),
       })
-      if (error) { setStaffMsg({ type:'error', text:error.message }); setStaffBusy(false); return }
+      const json = await res.json()
+      if (!res.ok) { setStaffMsg({ type:'error', text: json.error || 'Failed to create account.' }); setStaffBusy(false); return }
+    } catch (err) {
+      setStaffMsg({ type:'error', text: 'Network error. Please try again.' }); setStaffBusy(false); return
     }
     setStaffMsg({ type:'success', text:`${name} has been added. They will receive an email to set their password.` })
     setStaffForm({ email:'', name:'', location:'', role:'staff', password:'' })
