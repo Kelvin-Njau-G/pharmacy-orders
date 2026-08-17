@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import Navbar from '../components/Navbar'
 import StatusBadge from '../components/StatusBadge'
+import StockHistoryReport from '../components/StockHistoryReport'
 
 function fmt(n) {
   return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES', minimumFractionDigits:0 }).format(n)
@@ -31,6 +32,7 @@ const TABS = [
   { id:'orders',     label:'Orders' },
   { id:'staff',      label:'Staff accounts' },
   { id:'facilities', label:'Facilities' },
+  { id:'stock',      label:'Stock history' },
   { id:'settings',   label:'Settings' },
 ]
 
@@ -489,6 +491,9 @@ export default function AdminConsole() {
             )}
           </>
         )}
+
+        {/* ── STOCK HISTORY TAB ────────────────────────────────────────────── */}
+        {tab === 'stock' && <StockHistoryReport />}
 
         {/* ── SETTINGS TAB ─────────────────────────────────────────────────── */}
         {tab === 'settings' && (
