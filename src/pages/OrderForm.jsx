@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { calculateMaxQty, checkHmisVariance } from '../lib/validation'
 import { fetchOutOfStock } from '../lib/googleSheets'
+import { fetchSellThrough, computeMetrics, itemStatus, STATUS_CLASSES } from '../lib/sellThrough'
 import Navbar from '../components/Navbar'
 import StatusBadge from '../components/StatusBadge'
 import ProductSearch from '../components/ProductSearch'
@@ -67,7 +68,8 @@ export default function OrderForm() {
   const [saving,       setSaving]       = useState(false)
   const [viewMode,     setViewMode]     = useState('edit')  // 'edit' | 'list'
   const [submitAttempted, setSubmitAttempted] = useState(false)
-  const [outOfStockSkus, setOutOfStockSkus] = useState(new Set())
+  const [outOfStockSkus,  setOutOfStockSkus]  = useState(new Set())
+  const [sellThroughData, setSellThroughData] = useState(null)  // {sku: {lastRestockDate, salesSinceRestock}}
   const [pageError, setPageError] = useState(null)
 
   // Validation data
@@ -164,6 +166,12 @@ export default function OrderForm() {
   const readOnly = isAdmin || (!!order && order.status !== 'Draft')
 
   useEffect(() => { if (!isNew) load() }, [id])
+
+  useEffect(() => {
+    if (order?.status === 'Processed' && order?.pharmacy_location) {
+      fetchSellThrough(order.pharmacy_location).then(setSellThroughData)
+    }
+  }, [order?.id, order?.status])
 
   useEffect(() => {
     if (!profile || readOnly) return
@@ -568,6 +576,29 @@ export default function OrderForm() {
         </div>
 
         {/* Items */}
+        {/* ── Sell-through metrics (processed orders only) ─────────────────────── */}
+        {readOnly && order?.status === 'Processed' && sellThroughData && (() => {
+          const m = computeMetrics(items, sellThroughData, order.submitted_at)
+          const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
+          return (
+            <div className="grid grid-cols-4 gap-3 mb-5">
+              {[
+                { label: 'SKUs ordered',    value: m.skusOrdered,   sub: 'unique products' },
+                { label: 'SKUs supplied',   value: m.skusSupplied,  sub: 'restocked after order' },
+                { label: 'SKUs sold',       value: m.skusSold,      sub: 'with sales recorded' },
+                { label: 'Sell-through',    value: m.sellThrough !== null ? `${m.sellThrough}%` : '—',
+                  sub: 'sold of supplied', highlight: stColor },
+              ].map(card => (
+                <div key={card.label} className="bg-white border border-gray-200 rounded-xl p-4 text-center">
+                  <p className={`text-2xl font-extrabold ${card.highlight || 'text-gray-900'}`}>{card.value}</p>
+                  <p className="text-xs font-bold text-gray-500 mt-0.5 uppercase tracking-wide">{card.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{card.sub}</p>
+                </div>
+              ))}
+            </div>
+          )
+        })()}
+
         {/* View mode toggle — Edit vs List */}
         {!readOnly && items.length > 0 && (
           <div className="flex items-center justify-between mb-3">
@@ -668,7 +699,10 @@ export default function OrderForm() {
                   className={`rounded-xl border-2 overflow-hidden transition-all ${
                     isDragging  ? 'opacity-40 scale-[0.99]' :
                     isDragOver  ? 'border-brand shadow-md shadow-brand/10' :
-                    it._error   ? 'border-amber-300' : 'border-gray-200'
+                    it._error   ? 'border-amber-300' :
+                    (readOnly && sellThroughData && it.sku)
+                      ? STATUS_CLASSES[itemStatus(it.sku, sellThroughData, order?.submitted_at)]
+                      : 'bg-white border-gray-200'
                   }`}
                 >
                   {/* Card header */}

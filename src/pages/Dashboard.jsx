@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import Navbar from '../components/Navbar'
+import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import StatusBadge from '../components/StatusBadge'
 
 function fmt(amount) {
@@ -22,6 +23,7 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
+  const [stData,  setStData]  = useState({})   // sell-through: {facility: skuMap}
 
   useEffect(() => {
     if (!authLoading && isAdmin) navigate('/admin', { replace: true })
@@ -34,11 +36,20 @@ export default function Dashboard() {
 
   async function load() {
     const { data } = await supabase
-      .from('orders').select('*')
+      .from('orders').select('*, order_items(sku, product_name)')
       .eq('created_by', profile.id)
       .order('created_at', { ascending: false })
     setOrders(data || [])
     setLoading(false)
+
+    // Fetch sell-through data for each unique facility that has processed orders
+    const processedFacilities = [...new Set(
+      (data || []).filter(o => o.status === 'Processed').map(o => o.pharmacy_location)
+    )]
+    const results = await Promise.all(
+      processedFacilities.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) }))
+    )
+    setStData(Object.fromEntries(results.map(r => [r.fac, r.skuMap])))
   }
 
   // Emergency orders: always allowed
@@ -151,6 +162,25 @@ export default function Dashboard() {
                       </Link>
                     </td>
                   </tr>
+                {o.status === 'Processed' && stData[o.pharmacy_location] && (() => {
+                  const m = computeMetrics(o.order_items, stData[o.pharmacy_location], o.submitted_at)
+                  const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
+                  return (
+                    <tr key={`${o.id}-st`} className="bg-gray-50 border-b border-gray-100">
+                      <td colSpan={7} className="px-5 py-1.5">
+                        <span className="text-xs text-gray-500 font-medium">
+                          SKUs ordered: <strong>{m.skusOrdered}</strong>
+                          <span className="mx-2 text-gray-300">·</span>
+                          Supplied: <strong>{m.skusSupplied}</strong>
+                          <span className="mx-2 text-gray-300">·</span>
+                          Sold: <strong>{m.skusSold}</strong>
+                          <span className="mx-2 text-gray-300">·</span>
+                          Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })()}
                 ))}
               </tbody>
             </table>

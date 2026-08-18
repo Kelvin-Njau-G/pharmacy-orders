@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
+import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import { useAuth } from '../contexts/AuthContext'
 import Navbar from '../components/Navbar'
 import StatusBadge from '../components/StatusBadge'
-import StockHistoryReport from '../components/StockHistoryReport'
 
 function fmt(n) {
   return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES', minimumFractionDigits:0 }).format(n)
@@ -32,7 +33,6 @@ const TABS = [
   { id:'orders',     label:'Orders' },
   { id:'staff',      label:'Staff accounts' },
   { id:'facilities', label:'Facilities' },
-  { id:'stock',      label:'Stock history' },
   { id:'settings',   label:'Settings' },
 ]
 
@@ -44,6 +44,7 @@ export default function AdminConsole() {
   const [orders,      setOrders]      = useState([])
   const [ordersLoad,  setOrdersLoad]  = useState(true)
   const [filter,      setFilter]      = useState('Submitted')
+  const [stData,      setStData]      = useState({})  // sell-through: {facility: skuMap}
   const [processingId,setProcessing]  = useState(null)
 
   useEffect(() => { fetchOrders() }, [filter])
@@ -51,12 +52,24 @@ export default function AdminConsole() {
   async function fetchOrders() {
     setOrdersLoad(true)
     let q = supabase.from('orders')
-      .select('*, profiles(full_name, pharmacy_location)')
+      .select('*, profiles(full_name, pharmacy_location), order_items(sku, product_name)')
       .order('created_at', { ascending: false })
     if (filter !== 'All') q = q.eq('status', filter)
     const { data } = await q
     setOrders(data || [])
     setOrdersLoad(false)
+    // Fetch sell-through for each unique facility with processed orders
+    const processedFacilities = [...new Set(
+      (data || []).filter(o => o.status === 'Processed').map(o => o.pharmacy_location)
+    )]
+    const results = await Promise.all(
+      processedFacilities.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) }))
+    )
+    setStData(prev => ({ ...prev, ...Object.fromEntries(results.map(r => [r.fac, r.skuMap])) }))
+    // Fetch sell-through for each unique processed facility
+    const processed = [...new Set((data||[]).filter(o=>o.status==='Processed').map(o=>o.pharmacy_location))]
+    const results = await Promise.all(processed.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) })))
+    setStData(prev => ({ ...prev, ...Object.fromEntries(results.map(r => [r.fac, r.skuMap])) }))
   }
 
   async function markProcessed(orderId) {
@@ -266,7 +279,8 @@ export default function AdminConsole() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {orders.map(o => (
-                      <tr key={o.id} className="hover:bg-gray-50">
+                      <Fragment key={o.id}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-5 py-4 font-mono font-bold text-gray-700">#{String(o.order_number).padStart(4,'0')}</td>
                         <td className="px-5 py-4 font-semibold text-gray-800">{o.profiles?.full_name||'—'}</td>
                         <td className="px-5 py-4 text-gray-500 text-xs font-medium">{o.pharmacy_location}</td>
@@ -287,6 +301,25 @@ export default function AdminConsole() {
                           </div>
                         </td>
                       </tr>
+                      {o.status === 'Processed' && stData[o.pharmacy_location] && (() => {
+                        const m = computeMetrics(o.order_items, stData[o.pharmacy_location], o.submitted_at)
+                        const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
+                        return (
+                          <tr key={`${o.id}-st`} className="bg-gray-50 border-b border-gray-100">
+                            <td colSpan={8} className="px-5 py-1.5">
+                              <span className="text-xs text-gray-500 font-medium">
+                                SKUs ordered: <strong>{m.skusOrdered}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Supplied: <strong>{m.skusSupplied}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Sold: <strong>{m.skusSold}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })()}
                     ))}
                   </tbody>
                 </table>
@@ -388,6 +421,26 @@ export default function AdminConsole() {
                           )}
                         </td>
                       </tr>
+                      {o.status === 'Processed' && stData[o.pharmacy_location] && (() => {
+                        const m = computeMetrics(o.order_items, stData[o.pharmacy_location], o.submitted_at)
+                        const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
+                        return (
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            <td colSpan={8} className="px-5 py-1.5">
+                              <span className="text-xs text-gray-500 font-medium">
+                                SKUs ordered: <strong>{m.skusOrdered}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Supplied: <strong>{m.skusSupplied}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Sold: <strong>{m.skusSold}</strong>
+                                <span className="mx-2 text-gray-300">·</span>
+                                Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })()}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -491,9 +544,6 @@ export default function AdminConsole() {
             )}
           </>
         )}
-
-        {/* ── STOCK HISTORY TAB ────────────────────────────────────────────── */}
-        {tab === 'stock' && <StockHistoryReport />}
 
         {/* ── SETTINGS TAB ─────────────────────────────────────────────────── */}
         {tab === 'settings' && (
