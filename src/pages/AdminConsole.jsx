@@ -2,10 +2,10 @@ import { useState, useEffect, Fragment } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
-import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import { useAuth } from '../contexts/AuthContext'
 import Navbar from '../components/Navbar'
 import StatusBadge from '../components/StatusBadge'
+import StockHistoryReport from '../components/StockHistoryReport'
 
 function fmt(n) {
   return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES', minimumFractionDigits:0 }).format(n)
@@ -15,7 +15,6 @@ function fmtDate(str) {
   return new Date(str).toLocaleDateString('en-KE', { day:'numeric', month:'short', year:'numeric' })
 }
 
-// ── Reusable input ────────────────────────────────────────────────────────────
 function Field({ label, value, onChange, type='text', placeholder='', disabled }) {
   return (
     <div>
@@ -28,14 +27,13 @@ function Field({ label, value, onChange, type='text', placeholder='', disabled }
   )
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────────
 const TABS = [
   { id:'orders',     label:'Orders' },
   { id:'staff',      label:'Staff accounts' },
   { id:'facilities', label:'Facilities' },
+  { id:'stock',      label:'Stock history' },
   { id:'settings',   label:'Settings' },
 ]
-
 
 // ── Sell-through metrics sub-row ──────────────────────────────────────────────
 function SellThroughRow({ order, stData }) {
@@ -68,8 +66,8 @@ export default function AdminConsole() {
   const [orders,      setOrders]      = useState([])
   const [ordersLoad,  setOrdersLoad]  = useState(true)
   const [filter,      setFilter]      = useState('Submitted')
-  const [stData,      setStData]      = useState({})  // sell-through: {facility: skuMap}
   const [processingId,setProcessing]  = useState(null)
+  const [stData,      setStData]      = useState({})
 
   useEffect(() => { fetchOrders() }, [filter])
 
@@ -83,17 +81,13 @@ export default function AdminConsole() {
     setOrders(data || [])
     setOrdersLoad(false)
     // Fetch sell-through for each unique facility with processed orders
-    const processedFacilities = [...new Set(
+    const processedFacs = [...new Set(
       (data || []).filter(o => o.status === 'Processed').map(o => o.pharmacy_location)
     )]
-    const results = await Promise.all(
-      processedFacilities.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) }))
+    const fetched = await Promise.all(
+      processedFacs.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) }))
     )
-    setStData(prev => ({ ...prev, ...Object.fromEntries(results.map(r => [r.fac, r.skuMap])) }))
-    // Fetch sell-through for each unique processed facility
-    const processed = [...new Set((data||[]).filter(o=>o.status==='Processed').map(o=>o.pharmacy_location))]
-    const results = await Promise.all(processed.map(async fac => ({ fac, skuMap: await fetchSellThrough(fac) })))
-    setStData(prev => ({ ...prev, ...Object.fromEntries(results.map(r => [r.fac, r.skuMap])) }))
+    setStData(prev => ({ ...prev, ...Object.fromEntries(fetched.map(r => [r.fac, r.skuMap])) }))
   }
 
   async function markProcessed(orderId) {
@@ -132,7 +126,6 @@ export default function AdminConsole() {
   async function createStaff() {
     setStaffMsg({ type:null, text:'' })
     const { email, name, location, role, password } = staffForm
-    // Admins get 'Head Office' as their location automatically
     const effectiveLocation = role === 'admin' ? 'Head Office' : location
     if (!email || !name || !effectiveLocation || !password) {
       setStaffMsg({ type:'error', text:'Please fill in all fields.' }); return
@@ -170,7 +163,7 @@ export default function AdminConsole() {
   const [facForm,     setFacForm]     = useState({ name:'', discretionary_budget:2000 })
   const [facBusy,     setFacBusy]     = useState(false)
   const [facMsg,      setFacMsg]      = useState({ type:null, text:'' })
-  const [editBudget,  setEditBudget]  = useState({})  // { [id]: budget value being edited }
+  const [editBudget,  setEditBudget]  = useState({})
 
   useEffect(() => { fetchFacList() }, [])
 
@@ -261,7 +254,6 @@ export default function AdminConsole() {
       <div className="max-w-6xl mx-auto px-6 py-8">
         <h1 className="text-xl font-extrabold text-gray-900 mb-6">Admin console</h1>
 
-        {/* Tabs */}
         <div className="border-b border-gray-200 mb-6 flex gap-0 overflow-x-auto">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -304,46 +296,29 @@ export default function AdminConsole() {
                   <tbody className="divide-y divide-gray-50">
                     {orders.map(o => (
                       <Fragment key={o.id}>
-                      <tr className="hover:bg-gray-50">
-                        <td className="px-5 py-4 font-mono font-bold text-gray-700">#{String(o.order_number).padStart(4,'0')}</td>
-                        <td className="px-5 py-4 font-semibold text-gray-800">{o.profiles?.full_name||'—'}</td>
-                        <td className="px-5 py-4 text-gray-500 text-xs font-medium">{o.pharmacy_location}</td>
-                        <td className="px-5 py-4 text-gray-600 text-xs font-medium">{o.order_type}</td>
-                        <td className="px-5 py-4 text-gray-500 font-medium">{fmtDate(o.submitted_at)}</td>
-                        <td className="px-5 py-4 font-bold text-gray-800">{fmt(o.total_value)}</td>
-                        <td className="px-5 py-4"><StatusBadge status={o.status} /></td>
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3 justify-end">
-                            <Link to={`/orders/${o.id}`} className="text-xs text-brand hover:text-brand-dark font-bold">View</Link>
-                            {o.status === 'Submitted' && (
-                              <button onClick={() => markProcessed(o.id)} disabled={processingId===o.id}
-                                className="text-xs bg-green-600 hover:bg-green-700 text-white font-bold
-                                  px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
-                                {processingId===o.id ? 'Saving…' : 'Mark processed'}
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                      {o.status === 'Processed' && stData[o.pharmacy_location] && (() => {
-                        const m = computeMetrics(o.order_items, stData[o.pharmacy_location], o.submitted_at)
-                        const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
-                        return (
-                          <tr key={`${o.id}-st`} className="bg-gray-50 border-b border-gray-100">
-                            <td colSpan={8} className="px-5 py-1.5">
-                              <span className="text-xs text-gray-500 font-medium">
-                                SKUs ordered: <strong>{m.skusOrdered}</strong>
-                                <span className="mx-2 text-gray-300">·</span>
-                                Supplied: <strong>{m.skusSupplied}</strong>
-                                <span className="mx-2 text-gray-300">·</span>
-                                Sold: <strong>{m.skusSold}</strong>
-                                <span className="mx-2 text-gray-300">·</span>
-                                Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      })()}
+                        <tr className="hover:bg-gray-50">
+                          <td className="px-5 py-4 font-mono font-bold text-gray-700">#{String(o.order_number).padStart(4,'0')}</td>
+                          <td className="px-5 py-4 font-semibold text-gray-800">{o.profiles?.full_name||'—'}</td>
+                          <td className="px-5 py-4 text-gray-500 text-xs font-medium">{o.pharmacy_location}</td>
+                          <td className="px-5 py-4 text-gray-600 text-xs font-medium">{o.order_type}</td>
+                          <td className="px-5 py-4 text-gray-500 font-medium">{fmtDate(o.submitted_at)}</td>
+                          <td className="px-5 py-4 font-bold text-gray-800">{fmt(o.total_value)}</td>
+                          <td className="px-5 py-4"><StatusBadge status={o.status} /></td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3 justify-end">
+                              <Link to={`/orders/${o.id}`} className="text-xs text-brand hover:text-brand-dark font-bold">View</Link>
+                              {o.status === 'Submitted' && (
+                                <button onClick={() => markProcessed(o.id)} disabled={processingId===o.id}
+                                  className="text-xs bg-green-600 hover:bg-green-700 text-white font-bold
+                                    px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
+                                  {processingId===o.id ? 'Saving…' : 'Mark processed'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        <SellThroughRow order={o} stData={stData} />
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -445,8 +420,6 @@ export default function AdminConsole() {
                           )}
                         </td>
                       </tr>
-                      <SellThroughRow order={o} stData={stData} />
-                      </Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -551,6 +524,9 @@ export default function AdminConsole() {
           </>
         )}
 
+        {/* ── STOCK HISTORY TAB ────────────────────────────────────────────── */}
+        {tab === 'stock' && <StockHistoryReport />}
+
         {/* ── SETTINGS TAB ─────────────────────────────────────────────────── */}
         {tab === 'settings' && (
           <div className="max-w-lg">
@@ -563,7 +539,6 @@ export default function AdminConsole() {
                   Days-to-stock determines the maximum order quantity per product based on projected demand.
                   Products are categorised by their ABC class in Metabase.
                 </p>
-
                 <div className="space-y-4 mb-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -596,7 +571,6 @@ export default function AdminConsole() {
                     </div>
                   </div>
                 </div>
-
                 <div className="border-t border-gray-100 pt-5 mb-6">
                   <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">HMIS variance alert email</label>
                   <p className="text-xs text-gray-400 mb-2">Orders with staff stock differing &gt;20% from HMIS will be flagged. Enter an email to receive alerts.</p>
@@ -605,13 +579,11 @@ export default function AdminConsole() {
                     placeholder="alerts@afyanzima.com"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand" />
                 </div>
-
                 {settingsMsg.type && (
                   <div className={`mb-4 rounded-lg px-4 py-3 text-sm font-medium ${settingsMsg.type==='error' ? 'bg-brand-red-light border border-red-200 text-brand-red' : 'bg-green-50 border border-green-200 text-green-700'}`}>
                     {settingsMsg.text}
                   </div>
                 )}
-
                 <button onClick={saveSettings} disabled={settingsBusy}
                   className="bg-brand hover:bg-brand-dark text-white text-sm font-bold px-5 py-2.5 rounded-lg disabled:opacity-50">
                   {settingsBusy ? 'Saving…' : 'Save settings'}
