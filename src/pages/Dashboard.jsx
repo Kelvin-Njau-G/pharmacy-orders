@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
@@ -170,7 +170,8 @@ export default function Dashboard() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {orders.map(o => (
-                  <tr key={o.id} className="hover:bg-gray-50 transition-colors">
+                  <Fragment key={o.id}>
+                  <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-4 font-mono font-bold text-gray-700">
                       #{String(o.order_number).padStart(4, '0')}
                     </td>
@@ -185,7 +186,8 @@ export default function Dashboard() {
                       </Link>
                     </td>
                   </tr>
-                <SellThroughRow order={o} stData={stData} />
+                  <SellThroughRow order={o} stData={stData} />
+                  </Fragment>
                 ))}
               </tbody>
             </table>
