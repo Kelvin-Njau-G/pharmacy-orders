@@ -18,6 +18,29 @@ function fmtDate(str) {
   })
 }
 
+
+function SellThroughRow({ order, stData }) {
+  const skuMap = stData[order.pharmacy_location]
+  if (order.status !== 'Processed' || !skuMap) return null
+  const m = computeMetrics(order.order_items, skuMap, order.submitted_at)
+  const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
+  return (
+    <tr className="bg-gray-50 border-b border-gray-100">
+      <td colSpan={7} className="px-5 py-1.5">
+        <span className="text-xs text-gray-500 font-medium">
+          SKUs ordered: <strong>{m.skusOrdered}</strong>
+          <span className="mx-2 text-gray-300">·</span>
+          Supplied: <strong>{m.skusSupplied}</strong>
+          <span className="mx-2 text-gray-300">·</span>
+          Sold: <strong>{m.skusSold}</strong>
+          <span className="mx-2 text-gray-300">·</span>
+          Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
+        </span>
+      </td>
+    </tr>
+  )
+}
+
 export default function Dashboard() {
   const { profile, isAdmin, loading: authLoading } = useAuth()
   const navigate = useNavigate()
@@ -162,25 +185,7 @@ export default function Dashboard() {
                       </Link>
                     </td>
                   </tr>
-                {o.status === 'Processed' && stData[o.pharmacy_location] && (() => {
-                  const m = computeMetrics(o.order_items, stData[o.pharmacy_location], o.submitted_at)
-                  const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
-                  return (
-                    <tr key={`${o.id}-st`} className="bg-gray-50 border-b border-gray-100">
-                      <td colSpan={7} className="px-5 py-1.5">
-                        <span className="text-xs text-gray-500 font-medium">
-                          SKUs ordered: <strong>{m.skusOrdered}</strong>
-                          <span className="mx-2 text-gray-300">·</span>
-                          Supplied: <strong>{m.skusSupplied}</strong>
-                          <span className="mx-2 text-gray-300">·</span>
-                          Sold: <strong>{m.skusSold}</strong>
-                          <span className="mx-2 text-gray-300">·</span>
-                          Sell-through: <strong className={stColor}>{m.sellThrough !== null ? `${m.sellThrough}%` : '—'}</strong>
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })()}
+                <SellThroughRow order={o} stData={stData} />
                 ))}
               </tbody>
             </table>
