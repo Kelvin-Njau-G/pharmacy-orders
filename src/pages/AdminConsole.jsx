@@ -42,8 +42,8 @@ function SellThroughRow({ order, stData }) {
   const m = computeMetrics(order.order_items, skuMap, order.submitted_at)
   const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
   return (
-    <tr className="bg-gray-50 border-b border-gray-100">
-      <td colSpan={8} className="px-5 py-1.5">
+    <tr className="bg-gray-50">
+      <td colSpan={8} className="px-5 py-2 pb-2.5">
         <span className="text-xs text-gray-500 font-medium">
           SKUs ordered: <strong>{m.skusOrdered}</strong>
           <span className="mx-2 text-gray-300">·</span>
@@ -68,6 +68,9 @@ export default function AdminConsole() {
   const [filter,      setFilter]      = useState('Submitted')
   const [processingId,setProcessing]  = useState(null)
   const [stData,      setStData]      = useState({})
+  const [facilityFilter, setFacilityFilter] = useState('all')
+  const [dateFrom,       setDateFrom]       = useState('')
+  const [dateTo,         setDateTo]         = useState('')
 
   useEffect(() => { fetchOrders() }, [filter])
 
@@ -247,6 +250,17 @@ export default function AdminConsole() {
     setSettingsBusy(false)
   }
 
+  // ── Filtered orders for display ──────────────────────────────────────────────
+  const displayedOrders = orders.filter(o => {
+    if (facilityFilter !== 'all' && o.pharmacy_location !== facilityFilter) return false
+    if (dateFrom && o.submitted_at && o.submitted_at.slice(0, 10) < dateFrom) return false
+    if (dateTo   && o.submitted_at && o.submitted_at.slice(0, 10) > dateTo)   return false
+    return true
+  })
+
+  // Unique facilities from current orders for the filter dropdown
+  const orderFacilities = [...new Set(orders.map(o => o.pharmacy_location).filter(Boolean))].sort()
+
   // ── RENDER ────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50">
@@ -268,18 +282,48 @@ export default function AdminConsole() {
         {/* ── ORDERS TAB ──────────────────────────────────────────────────── */}
         {tab === 'orders' && (
           <>
-            <div className="flex items-center gap-2 mb-5">
-              <span className="text-sm text-gray-500 font-bold mr-1">Show:</span>
-              {['All','Draft','Submitted','Processed'].map(s => (
-                <button key={s} onClick={() => setFilter(s)}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors ${
-                    filter === s ? 'bg-brand text-white' : 'bg-white text-gray-600 border border-gray-200 hover:border-gray-300'
-                  }`}>{s}</button>
-              ))}
+            <div className="space-y-3 mb-5">
+              {/* Status filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500 font-bold mr-1">Show:</span>
+                {['All','Draft','Submitted','Processed'].map(s => (
+                  <button key={s} onClick={() => setFilter(s)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                      filter === s ? 'bg-brand text-white' : 'bg-white text-gray-600 border border-gray-200 hover:border-gray-300'
+                    }`}>{s}</button>
+                ))}
+              </div>
+              {/* Facility + date filters */}
+              <div className="flex flex-wrap items-center gap-3">
+                <select value={facilityFilter} onChange={e => setFacilityFilter(e.target.value)}
+                  className="px-3 py-1.5 text-xs font-bold border border-gray-200 rounded-lg bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand">
+                  <option value="all">All facilities</option>
+                  {orderFacilities.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+                <div className="flex items-center gap-2 text-xs text-gray-500 font-bold">
+                  <span>Submitted:</span>
+                  <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand" />
+                  <span>to</span>
+                  <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand" />
+                </div>
+                {(facilityFilter !== 'all' || dateFrom || dateTo) && (
+                  <button onClick={() => { setFacilityFilter('all'); setDateFrom(''); setDateTo('') }}
+                    className="text-xs text-gray-400 hover:text-gray-700 font-bold underline">
+                    Clear filters
+                  </button>
+                )}
+                {(facilityFilter !== 'all' || dateFrom || dateTo) && (
+                  <span className="text-xs text-gray-400 font-medium">
+                    {displayedOrders.length} of {orders.length} orders
+                  </span>
+                )}
+              </div>
             </div>
             {ordersLoad ? (
               <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand" /></div>
-            ) : orders.length === 0 ? (
+            ) : displayedOrders.length === 0 ? (
               <div className="text-center py-20 bg-white rounded-2xl border border-gray-200">
                 <p className="text-sm text-gray-500 font-medium">No orders found.</p>
               </div>
@@ -294,8 +338,13 @@ export default function AdminConsole() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {orders.map(o => (
+                    {displayedOrders.map((o, idx) => (
                       <Fragment key={o.id}>
+                        {idx > 0 && (
+                          <tr aria-hidden="true">
+                            <td colSpan={8} className="p-0 border-t-2 border-gray-200" />
+                          </tr>
+                        )}
                         <tr className="hover:bg-gray-50">
                           <td className="px-5 py-4 font-mono font-bold text-gray-700">#{String(o.order_number).padStart(4,'0')}</td>
                           <td className="px-5 py-4 font-semibold text-gray-800">{o.profiles?.full_name||'—'}</td>
