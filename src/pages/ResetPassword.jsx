@@ -78,11 +78,14 @@ export default function ResetPassword() {
     const { data: updateData, error } = await supabase.auth.updateUser({ password })
     if (error) { setLoading(false); setError(error.message); return }
 
-    // Clear the must_change_password flag if it was set (first-login flow)
+    // Clear must_change_password via service-role API endpoint —
+    // the restricted password-reset session cannot update its own profile row
     if (updateData?.user?.id) {
-      await supabase.from('profiles')
-        .update({ must_change_password: false })
-        .eq('id', updateData.user.id)
+      await fetch('/api/clear-password-flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: updateData.user.id }),
+      }).catch(err => console.error('[clear-password-flag]', err))
     }
     setLoading(false)
     navigate('/dashboard', { replace: true })

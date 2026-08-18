@@ -169,8 +169,13 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {orders.map(o => (
+                {orders.map((o, idx) => (
                   <Fragment key={o.id}>
+                  {idx > 0 && (
+                    <tr aria-hidden="true">
+                      <td colSpan={7} className="p-0 border-t-2 border-gray-200" />
+                    </tr>
+                  )}
                   <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-4 font-mono font-bold text-gray-700">
                       #{String(o.order_number).padStart(4, '0')}
