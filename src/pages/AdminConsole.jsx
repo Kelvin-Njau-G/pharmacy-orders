@@ -66,7 +66,8 @@ export default function AdminConsole() {
   const [orders,      setOrders]      = useState([])
   const [ordersLoad,  setOrdersLoad]  = useState(true)
   const [filter,      setFilter]      = useState('Submitted')
-  const [processingId,setProcessing]  = useState(null)
+  const [changingStatusId, setChangingStatusId] = useState(null)
+  const [downloadingId,    setDownloadingId]    = useState(null)
   const [stData,      setStData]      = useState({})
   const [facilityFilter, setFacilityFilter] = useState('all')
   const [dateFrom,       setDateFrom]       = useState('')
@@ -93,13 +94,51 @@ export default function AdminConsole() {
     setStData(prev => ({ ...prev, ...Object.fromEntries(fetched.map(r => [r.fac, r.skuMap])) }))
   }
 
-  async function markProcessed(orderId) {
-    setProcessing(orderId)
-    await supabase.from('orders').update({
-      status: 'Processed', processed_at: new Date().toISOString(),
-    }).eq('id', orderId)
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Processed' } : o))
-    setProcessing(null)
+  async function changeOrderStatus(orderId, newStatus) {
+    setChangingStatusId(orderId)
+    const now = new Date().toISOString()
+    const updates = { status: newStatus }
+    if (newStatus === 'Submitted') updates.submitted_at = now
+    if (newStatus === 'Processed') updates.processed_at = now
+    if (newStatus === 'Draft')   { updates.submitted_at = null; updates.processed_at = null }
+    if (newStatus === 'Cancelled') updates.cancelled_at = now
+    await supabase.from('orders').update(updates).eq('id', orderId)
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updates } : o))
+    setChangingStatusId(null)
+  }
+
+  async function downloadOrderCsv(order) {
+    setDownloadingId(order.id)
+    const { data: items } = await supabase
+      .from('order_items')
+      .select('sku, product_name, order_quantity, unit_price, reason_for_ordering')
+      .eq('order_id', order.id)
+    setDownloadingId(null)
+
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const headers = ['Order No', 'Facility', 'SKU', 'Product Name', 'Qty Ordered', 'Unit Price (KES)', 'Line Total (KES)', 'Reason']
+    const rows = (items || []).map(it => {
+      const qty   = parseFloat(it.order_quantity) || 0
+      const price = parseFloat(it.unit_price) || 0
+      return [
+        esc(`#${String(order.order_number).padStart(4,'0')}`),
+        esc(order.pharmacy_location),
+        esc(it.sku || ''),
+        esc(it.product_name || ''),
+        qty,
+        price.toFixed(2),
+        (qty * price).toFixed(2),
+        esc(it.reason_for_ordering || ''),
+      ].join(',')
+    })
+    const csv  = [headers.join(','), ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `order_${String(order.order_number).padStart(4,'0')}_${order.pharmacy_location.replace(/\s+/g,'_')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   // ── STAFF ────────────────────────────────────────────────────────────────────
@@ -354,15 +393,29 @@ export default function AdminConsole() {
                           <td className="px-5 py-4 font-bold text-gray-800">{fmt(o.total_value)}</td>
                           <td className="px-5 py-4"><StatusBadge status={o.status} /></td>
                           <td className="px-5 py-4">
-                            <div className="flex items-center gap-3 justify-end">
-                              <Link to={`/orders/${o.id}`} className="text-xs text-brand hover:text-brand-dark font-bold">View</Link>
-                              {o.status === 'Submitted' && (
-                                <button onClick={() => markProcessed(o.id)} disabled={processingId===o.id}
-                                  className="text-xs bg-green-600 hover:bg-green-700 text-white font-bold
-                                    px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap">
-                                  {processingId===o.id ? 'Saving…' : 'Mark processed'}
-                                </button>
-                              )}
+                            <div className="flex items-center gap-2 justify-end">
+                              <Link to={`/orders/${o.id}`}
+                                className="text-xs text-brand hover:text-brand-dark font-bold whitespace-nowrap">
+                                View
+                              </Link>
+                              <button onClick={() => downloadOrderCsv(o)}
+                                disabled={downloadingId === o.id}
+                                title="Download order as CSV"
+                                className="text-xs text-gray-500 hover:text-gray-800 font-bold border border-gray-200
+                                  px-2 py-1 rounded-lg hover:border-gray-300 disabled:opacity-50 whitespace-nowrap">
+                                {downloadingId === o.id ? '…' : '↓ CSV'}
+                              </button>
+                              <select
+                                value={o.status}
+                                onChange={e => changeOrderStatus(o.id, e.target.value)}
+                                disabled={changingStatusId === o.id}
+                                className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1
+                                  bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand
+                                  disabled:opacity-50 cursor-pointer">
+                                {['Draft','Submitted','Processed','Cancelled'].map(s => (
+                                  <option key={s} value={s}>{s}</option>
+                                ))}
+                              </select>
                             </div>
                           </td>
                         </tr>
