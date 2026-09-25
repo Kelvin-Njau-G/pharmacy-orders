@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import Navbar from '../components/Navbar'
+import MissedSaleModal from '../components/MissedSaleModal'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import StatusBadge from '../components/StatusBadge'
 
@@ -47,10 +48,25 @@ export default function Dashboard() {
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
   const [stData,  setStData]  = useState({})   // sell-through: {facility: skuMap}
+  const [missedSaleOpen, setMissedSaleOpen] = useState(false)
+  const [facilityHasActiveSup, setFacilityHasActiveSup] = useState(false)
 
   useEffect(() => {
     if (!authLoading && isAdmin) navigate('/admin', { replace: true })
   }, [isAdmin, authLoading])
+
+  // Check at facility level — catches multi-staff and two-tab race conditions
+  useEffect(() => {
+    if (!profile?.pharmacy_location) return
+    supabase
+      .from('orders')
+      .select('id')
+      .eq('pharmacy_location', profile.pharmacy_location)
+      .eq('order_type', 'Supplementary Order')
+      .in('status', ['Draft', 'Submitted'])
+      .limit(1)
+      .then(({ data }) => setFacilityHasActiveSup((data?.length || 0) > 0))
+  }, [profile?.pharmacy_location])
 
   useEffect(() => {
     if (profile && !isAdmin) load()
@@ -80,7 +96,8 @@ export default function Dashboard() {
   const activeSupplementary = orders.find(
     o => o.order_type === 'Supplementary Order' && (o.status === 'Draft' || o.status === 'Submitted')
   )
-  const canCreateSupplementary = !activeSupplementary
+  // Block if this user has one OR if any staff at this facility has one
+  const canCreateSupplementary = !activeSupplementary && !facilityHasActiveSup
 
   function newOrder(orderType) {
     navigate('/orders/new', { state: { orderType } })
@@ -103,6 +120,20 @@ export default function Dashboard() {
                 Continue supplementary order →
               </Link>
             )}
+
+            {/* Missed Sale */}
+            <button
+              onClick={() => setMissedSaleOpen(true)}
+              className="inline-flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700
+                text-sm font-bold px-4 py-2.5 rounded-lg transition-colors border border-gray-300
+                hover:border-gray-400"
+            >
+              <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              Missed Sale
+            </button>
 
             {/* Emergency Order — always enabled */}
             <button
@@ -200,5 +231,10 @@ export default function Dashboard() {
         )}
       </div>
     </div>
+
+    {/* Missed Sale Modal */}
+    {missedSaleOpen && profile && (
+      <MissedSaleModal profile={profile} onClose={() => setMissedSaleOpen(false)} />
+    )}
   )
 }
