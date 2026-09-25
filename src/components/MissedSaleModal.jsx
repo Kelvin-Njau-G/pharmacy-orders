@@ -102,6 +102,25 @@ export default function MissedSaleModal({ profile, onClose }) {
       isNew = true
     }
 
+    // Check for duplicate SKU in the order before inserting
+    if (product.sku) {
+      const { data: dup } = await supabase
+        .from('order_items')
+        .select('id')
+        .eq('order_id', orderId)
+        .eq('sku', product.sku)
+        .limit(1)
+
+      if (dup?.length > 0) {
+        setAddingToOrder(false)
+        setDoneMessage(
+          `${product.name} is already in your supplementary order draft. Open the order to update the quantity if needed.`
+        )
+        setStep('done')
+        return
+      }
+    }
+
     await supabase.from('order_items').insert({
       order_id:            orderId,
       sku:                 product.sku || '',
