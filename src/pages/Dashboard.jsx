@@ -230,11 +230,10 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+      {/* Missed Sale Modal */}
+      {missedSaleOpen && profile && (
+        <MissedSaleModal profile={profile} onClose={() => setMissedSaleOpen(false)} />
+      )}
     </div>
-
-    {/* Missed Sale Modal */}
-    {missedSaleOpen && profile && (
-      <MissedSaleModal profile={profile} onClose={() => setMissedSaleOpen(false)} />
-    )}
   )
 }
