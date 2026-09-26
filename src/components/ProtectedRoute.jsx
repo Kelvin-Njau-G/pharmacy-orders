@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import FacilityPicker from './FacilityPicker'
 
 function Spinner() {
   return (
@@ -10,25 +11,22 @@ function Spinner() {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }) {
-  const { user, profile, loading, mustChangePassword } = useAuth()
+  const { user, profile, loading, mustChangePassword,
+          needsFacilityPick, assignedFacilities, switchFacility } = useAuth()
   const location = useLocation()
 
-  // Auth check (localStorage read) — should be instant
   if (loading) return <Spinner />
+  if (!user)   return <Navigate to="/login" replace />
 
-  // Not logged in
-  if (!user) return <Navigate to="/login" replace />
-
-  // Force password change on first login (admin-created accounts)
-  if (mustChangePassword && location.pathname !== '/reset-password') {
+  if (mustChangePassword && location.pathname !== '/reset-password')
     return <Navigate to="/reset-password" replace />
-  }
 
-  // Profile is still loading from the network (brief background fetch).
-  // Show spinner only for admin routes where we need the role to decide routing.
-  // For regular routes, let the child render — it handles null profile gracefully.
+  // Show facility picker before the app when staff has multiple facilities
+  if (needsFacilityPick)
+    return <FacilityPicker facilities={assignedFacilities} profile={profile} onSelect={switchFacility} />
+
   if (adminOnly && !profile) return <Spinner />
-  if (adminOnly && profile.role !== 'admin') return <Navigate to="/dashboard" replace />
+  if (adminOnly && profile?.role !== 'admin') return <Navigate to="/dashboard" replace />
 
   return children
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
@@ -147,7 +147,9 @@ export default function AdminConsole() {
   const [facilities, setFacilities] = useState([])
 
   const [showStaffForm, setShowStaffForm] = useState(false)
-  const [staffForm, setStaffForm] = useState({ email:'', name:'', location:'', role:'staff', password:'' })
+  const [staffForm, setStaffForm] = useState({ email:'', name:'', facilityIds:[], role:'staff', password:'' })
+  const [managingStaff,  setManagingStaff]  = useState(null)   // {id, name, facilityIds}
+  const [manageBusy,     setManageBusy]     = useState(false)
   const [staffBusy, setStaffBusy] = useState(false)
   const [staffMsg,  setStaffMsg]  = useState({ type:null, text:'' })
 
@@ -155,7 +157,7 @@ export default function AdminConsole() {
 
   async function fetchStaff() {
     setStaffLoad(true)
-    const { data } = await supabase.from('profiles').select('*').order('full_name')
+    const { data } = await supabase.from('profiles').select('*, staff_facilities(facility_id, facilities(id,name))').order('full_name')
     setStaff(data || [])
     setStaffLoad(false)
   }
@@ -168,9 +170,9 @@ export default function AdminConsole() {
   async function createStaff() {
     setStaffMsg({ type:null, text:'' })
     const { email, name, location, role, password } = staffForm
-    const effectiveLocation = role === 'admin' ? 'Head Office' : location
-    if (!email || !name || !effectiveLocation || !password) {
-      setStaffMsg({ type:'error', text:'Please fill in all fields.' }); return
+    const effectiveLocation = role === 'admin' ? 'Head Office' : (staffForm.facilityIds?.[0] ? 'assigned' : '')
+    if (!email || !name || (role !== 'admin' && !staffForm.facilityIds?.length) || !password) {
+      setStaffMsg({ type:'error', text: role === 'admin' ? 'Please fill in all fields.' : 'Please fill in all fields and select at least one facility.' }); return
     }
     if (password.length < 6) {
       setStaffMsg({ type:'error', text:'Password must be at least 6 characters.' }); return
@@ -180,7 +182,7 @@ export default function AdminConsole() {
       const res = await fetch('/api/create-staff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name, location: effectiveLocation, role }),
+        body: JSON.stringify({ email, password, name, facilityIds: role === 'admin' ? [] : staffForm.facilityIds, role }),
       })
       const json = await res.json()
       if (!res.ok) { setStaffMsg({ type:'error', text: json.error || 'Failed to create account.' }); setStaffBusy(false); return }
@@ -188,7 +190,7 @@ export default function AdminConsole() {
       setStaffMsg({ type:'error', text: 'Network error. Please try again.' }); setStaffBusy(false); return
     }
     setStaffMsg({ type:'success', text:`${name} has been added. They will receive an email to set their password.` })
-    setStaffForm({ email:'', name:'', location:'', role:'staff', password:'' })
+    setStaffForm({ email:'', name:'', facilityIds:[], role:'staff', password:'' })
     fetchStaff()
     setStaffBusy(false)
   }
@@ -299,6 +301,22 @@ export default function AdminConsole() {
 
   // Unique facilities from current orders for the filter dropdown
   const orderFacilities = [...new Set(orders.map(o => o.pharmacy_location).filter(Boolean))].sort()
+
+  // ── Manage facility access for existing staff ────────────────────────────────
+  async function saveFacilityAccess() {
+    if (!managingStaff) return
+    setManageBusy(true)
+    // Delete existing rows then re-insert selected
+    await supabase.from('staff_facilities').delete().eq('staff_id', managingStaff.id)
+    if (managingStaff.facilityIds.length > 0) {
+      await supabase.from('staff_facilities').insert(
+        managingStaff.facilityIds.map(fid => ({ staff_id: managingStaff.id, facility_id: fid }))
+      )
+    }
+    setManagingStaff(null)
+    setManageBusy(false)
+    fetchStaff()
+  }
 
   // ── RENDER ────────────────────────────────────────────────────────────────────
   return (
@@ -449,15 +467,27 @@ export default function AdminConsole() {
                   <Field label="Full name"      value={staffForm.name}     onChange={v => setStaffForm(f=>({...f,name:v}))}     placeholder="Jane Doe" />
                   <Field label="Email address"  value={staffForm.email}    onChange={v => setStaffForm(f=>({...f,email:v}))}    type="email" placeholder="jane@example.com" />
                   <Field label="Temp. password" value={staffForm.password} onChange={v => setStaffForm(f=>({...f,password:v}))} placeholder="Min. 6 characters" />
-                  <div>
-                    <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Location</label>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Facilities</label>
                     {staffForm.role === 'admin'
-                      ? <p className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium bg-gray-50 text-gray-500">Head Office</p>
-                      : <select value={staffForm.location} onChange={e => setStaffForm(f=>({...f,location:e.target.value}))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-                          <option value="">Select facility…</option>
-                          {facilities.map(fac => <option key={fac.id} value={fac.name}>{fac.name}</option>)}
-                        </select>
+                      ? <p className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium bg-gray-50 text-gray-500">Head Office (all facilities)</p>
+                      : <div className="border border-gray-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                          {facilities.map(fac => (
+                            <label key={fac.id} className="flex items-center gap-2.5 cursor-pointer">
+                              <input type="checkbox"
+                                checked={staffForm.facilityIds?.includes(fac.id) || false}
+                                onChange={e => {
+                                  const ids = staffForm.facilityIds || []
+                                  setStaffForm(f => ({
+                                    ...f,
+                                    facilityIds: e.target.checked ? [...ids, fac.id] : ids.filter(id => id !== fac.id)
+                                  }))
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand" />
+                              <span className="text-sm text-gray-700">{fac.name}</span>
+                            </label>
+                          ))}
+                        </div>
                     }
                   </div>
                   <div>
@@ -497,16 +527,29 @@ export default function AdminConsole() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50">
-                      {['Name','Location','Role','Status',''].map(h => (
+                      {['Name','Facilities','Role','Status',''].map(h => (
                         <th key={h} className="px-5 py-3.5 text-left text-xs font-extrabold text-gray-500 uppercase tracking-wider last:w-24">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {staff.map(s => (
+                      <>
                       <tr key={s.id} className={`hover:bg-gray-50 ${!s.is_active ? 'opacity-50' : ''}`}>
                         <td className="px-5 py-4 font-bold text-gray-800">{s.full_name}</td>
-                        <td className="px-5 py-4 text-gray-500 text-xs font-medium">{s.pharmacy_location}</td>
+                        <td className="px-5 py-4">
+                          <div className="flex flex-wrap gap-1">
+                            {(s.staff_facilities?.length > 0
+                              ? s.staff_facilities.map(sf => (
+                                  <span key={sf.facility_id}
+                                    className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium">
+                                    {sf.facilities?.name}
+                                  </span>
+                                ))
+                              : [<span key="leg" className="text-xs text-gray-400">{s.pharmacy_location || '—'}</span>]
+                            )}
+                          </div>
+                        </td>
                         <td className="px-5 py-4">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${s.role==='admin' ? 'bg-brand-navy-light text-brand-navy ring-1 ring-brand-navy/30' : 'bg-gray-100 text-gray-600'}`}>{s.role}</span>
                         </td>
@@ -514,14 +557,62 @@ export default function AdminConsole() {
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${s.is_active ? 'bg-green-50 text-green-700 ring-1 ring-green-200' : 'bg-gray-50 text-gray-500 ring-1 ring-gray-200'}`}>{s.is_active ? 'Active' : 'Disabled'}</span>
                         </td>
                         <td className="px-5 py-4 text-right">
-                          {s.id !== profile?.id && (
-                            <button onClick={() => toggleStaffActive(s.id, s.is_active)}
-                              className="text-xs text-gray-400 hover:text-gray-700 font-bold border border-gray-200 px-3 py-1.5 rounded-lg hover:border-gray-300">
-                              {s.is_active ? 'Disable' : 'Enable'}
-                            </button>
-                          )}
+                          <div className="flex items-center gap-2 justify-end">
+                            {s.role !== 'admin' && (
+                              <button
+                                onClick={() => setManagingStaff({
+                                  id: s.id, name: s.full_name,
+                                  facilityIds: s.staff_facilities?.map(sf => sf.facility_id) || []
+                                })}
+                                className="text-xs text-brand hover:text-brand-dark font-bold border border-brand/30 px-3 py-1.5 rounded-lg">
+                                Facilities
+                              </button>
+                            )}
+                            {s.id !== profile?.id && (
+                              <button onClick={() => toggleStaffActive(s.id, s.is_active)}
+                                className="text-xs text-gray-400 hover:text-gray-700 font-bold border border-gray-200 px-3 py-1.5 rounded-lg hover:border-gray-300">
+                                {s.is_active ? 'Disable' : 'Enable'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
+                      {managingStaff?.id === s.id && (
+                        <tr key={`${s.id}-manage`} className="bg-blue-50 border-b border-blue-100">
+                          <td colSpan={5} className="px-5 py-4">
+                            <p className="text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">
+                              Facility access for {managingStaff.name}
+                            </p>
+                            <div className="flex flex-wrap gap-3 mb-3">
+                              {facilities.map(fac => (
+                                <label key={fac.id} className="flex items-center gap-2 cursor-pointer">
+                                  <input type="checkbox"
+                                    checked={managingStaff.facilityIds.includes(fac.id)}
+                                    onChange={e => setManagingStaff(prev => ({
+                                      ...prev,
+                                      facilityIds: e.target.checked
+                                        ? [...prev.facilityIds, fac.id]
+                                        : prev.facilityIds.filter(id => id !== fac.id)
+                                    }))}
+                                    className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand" />
+                                  <span className="text-sm text-gray-700">{fac.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={saveFacilityAccess} disabled={manageBusy}
+                                className="text-xs bg-brand text-white font-bold px-3 py-1.5 rounded-lg disabled:opacity-50">
+                                {manageBusy ? 'Saving…' : 'Save access'}
+                              </button>
+                              <button onClick={() => setManagingStaff(null)}
+                                className="text-xs text-gray-500 font-bold border border-gray-200 px-3 py-1.5 rounded-lg">
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </>
                     ))}
                   </tbody>
                 </table>
