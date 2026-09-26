@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
@@ -534,8 +534,8 @@ export default function AdminConsole() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {staff.map(s => (
-                      <>
-                      <tr key={s.id} className={`hover:bg-gray-50 ${!s.is_active ? 'opacity-50' : ''}`}>
+                      <Fragment key={s.id}>
+                      <tr className={`hover:bg-gray-50 ${!s.is_active ? 'opacity-50' : ''}`}>
                         <td className="px-5 py-4 font-bold text-gray-800">{s.full_name}</td>
                         <td className="px-5 py-4">
                           <div className="flex flex-wrap gap-1">
@@ -612,7 +612,7 @@ export default function AdminConsole() {
                           </td>
                         </tr>
                       )}
-                      </>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
