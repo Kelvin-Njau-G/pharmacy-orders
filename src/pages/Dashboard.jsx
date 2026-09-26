@@ -77,6 +77,7 @@ export default function Dashboard() {
     const { data } = await supabase
       .from('orders').select('*, order_items(sku, product_name)')
       .eq('created_by', profile.id)
+      .eq('pharmacy_location', profile.pharmacy_location)
       .order('created_at', { ascending: false })
     setOrders(data || [])
     setLoading(false)
