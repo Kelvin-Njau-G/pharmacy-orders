@@ -22,13 +22,28 @@ function fmtDate(str) {
 
 function SellThroughRow({ order, stData }) {
   const skuMap = stData[order.pharmacy_location]
-  if (order.status !== 'Processed' || !skuMap) return null
+  const staffName = order.profiles?.full_name
+
+  if (order.status !== 'Processed' || !skuMap) {
+    if (!staffName) return null
+    return (
+      <tr className="bg-gray-50 border-b border-gray-100">
+        <td colSpan={7} className="px-5 py-1">
+          <span className="text-xs text-gray-400 font-medium">By {staffName}</span>
+        </td>
+      </tr>
+    )
+  }
+
   const m = computeMetrics(order.order_items, skuMap, order.submitted_at)
   const stColor = m.sellThrough >= 90 ? 'text-green-600' : m.sellThrough >= 60 ? 'text-amber-600' : 'text-red-500'
   return (
     <tr className="bg-gray-50 border-b border-gray-100">
       <td colSpan={7} className="px-5 py-1.5">
         <span className="text-xs text-gray-500 font-medium">
+          {staffName && (
+            <><span className="text-gray-400">By {staffName}</span><span className="mx-2 text-gray-300">·</span></>
+          )}
           SKUs ordered: <strong>{m.skusOrdered}</strong>
           <span className="mx-2 text-gray-300">·</span>
           Supplied: <strong>{m.skusSupplied}</strong>
@@ -75,8 +90,7 @@ export default function Dashboard() {
 
   async function load() {
     const { data } = await supabase
-      .from('orders').select('*, order_items(sku, product_name)')
-      .eq('created_by', profile.id)
+      .from('orders').select('*, order_items(sku, product_name), profiles(full_name)')
       .eq('pharmacy_location', profile.pharmacy_location)
       .order('created_at', { ascending: false })
     setOrders(data || [])
@@ -110,7 +124,7 @@ export default function Dashboard() {
       <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex items-start justify-between mb-6">
           <div>
-            <h1 className="text-xl font-extrabold text-gray-900">My orders</h1>
+            <h1 className="text-xl font-extrabold text-gray-900">Facility orders</h1>
             <p className="text-sm text-gray-400 mt-0.5 font-medium">{profile?.pharmacy_location}</p>
           </div>
           <div className="flex items-center gap-3">
