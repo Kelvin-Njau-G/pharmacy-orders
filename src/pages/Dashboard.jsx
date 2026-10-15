@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import Navbar from '../components/Navbar'
 import MissedSaleModal from '../components/MissedSaleModal'
+import PricingFeedbackModal from '../components/PricingFeedbackModal'
+import CreditNoteModal from '../components/CreditNoteModal'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import StatusBadge from '../components/StatusBadge'
 
@@ -64,6 +66,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [stData,  setStData]  = useState({})   // sell-through: {facility: skuMap}
   const [missedSaleOpen, setMissedSaleOpen] = useState(false)
+  const [pricingFeedbackOpen, setPricingFeedbackOpen] = useState(false)
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false)
   const [facilityHasActiveSup, setFacilityHasActiveSup] = useState(false)
 
   useEffect(() => {
@@ -127,57 +131,91 @@ export default function Dashboard() {
             <h1 className="text-xl font-extrabold text-gray-900">Facility orders</h1>
             <p className="text-sm text-gray-400 mt-0.5 font-medium">{profile?.pharmacy_location}</p>
           </div>
-          <div className="flex items-center gap-3">
-            {activeSupplementary && (
-              <Link to={`/orders/${activeSupplementary.id}`}
-                className="text-sm text-brand hover:text-brand-dark font-bold border border-brand/30
-                  px-3.5 py-2 rounded-lg hover:bg-brand-light transition-colors">
-                Continue supplementary order →
-              </Link>
-            )}
+          <div className="flex flex-col items-end gap-2">
+            {/* Row 1 — primary order actions */}
+            <div className="flex items-center gap-3">
+              {activeSupplementary && (
+                <Link to={`/orders/${activeSupplementary.id}`}
+                  className="text-sm text-brand hover:text-brand-dark font-bold border border-brand/30
+                    px-3.5 py-2 rounded-lg hover:bg-brand-light transition-colors">
+                  Continue supplementary order →
+                </Link>
+              )}
 
-            {/* Missed Sale */}
-            <button
-              onClick={() => setMissedSaleOpen(true)}
-              className="inline-flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700
-                text-sm font-bold px-4 py-2.5 rounded-lg transition-colors border border-gray-300
-                hover:border-gray-400"
-            >
-              <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-              </svg>
-              Missed Sale
-            </button>
+              {/* Emergency Order — always enabled */}
+              <button
+                onClick={() => newOrder('Emergency Order')}
+                className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white
+                  text-sm font-bold px-4 py-2.5 rounded-lg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Emergency Order
+              </button>
 
-            {/* Emergency Order — always enabled */}
-            <button
-              onClick={() => newOrder('Emergency Order')}
-              className="inline-flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white
-                text-sm font-bold px-4 py-2.5 rounded-lg transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Emergency Order
-            </button>
+              {/* Supplementary Order — disabled when one is already active */}
+              <button
+                onClick={() => newOrder('Supplementary Order')}
+                disabled={!canCreateSupplementary}
+                title={!canCreateSupplementary
+                  ? 'Your current supplementary order must be processed before creating a new one.'
+                  : 'Create a new supplementary order'}
+                className="inline-flex items-center gap-2 bg-brand hover:bg-brand-dark text-white
+                  text-sm font-bold px-4 py-2.5 rounded-lg transition-colors
+                  disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Supplementary Order
+              </button>
+            </div>
 
-            {/* Supplementary Order — disabled when one is already active */}
-            <button
-              onClick={() => newOrder('Supplementary Order')}
-              disabled={!canCreateSupplementary}
-              title={!canCreateSupplementary
-                ? 'Your current supplementary order must be processed before creating a new one.'
-                : 'Create a new supplementary order'}
-              className="inline-flex items-center gap-2 bg-brand hover:bg-brand-dark text-white
-                text-sm font-bold px-4 py-2.5 rounded-lg transition-colors
-                disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Supplementary Order
-            </button>
+            {/* Row 2 — secondary feedback actions (outlined) */}
+            <div className="flex items-center gap-2">
+              {/* Missed Sale */}
+              <button
+                onClick={() => setMissedSaleOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600
+                  text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors border border-gray-200
+                  hover:border-gray-300"
+              >
+                <svg className="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                Missed Sale
+              </button>
+
+              {/* Pricing Feedback */}
+              <button
+                onClick={() => setPricingFeedbackOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600
+                  text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors border border-gray-200
+                  hover:border-gray-300"
+              >
+                <svg className="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                </svg>
+                Pricing Feedback
+              </button>
+
+              {/* Credit Note — staff only */}
+              <button
+                onClick={() => setCreditNoteOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600
+                  text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors border border-gray-200
+                  hover:border-gray-300"
+              >
+                <svg className="w-3.5 h-3.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
+                </svg>
+                Credit Note
+              </button>
+            </div>
           </div>
         </div>
 
@@ -248,6 +286,16 @@ export default function Dashboard() {
       {/* Missed Sale Modal */}
       {missedSaleOpen && profile && (
         <MissedSaleModal profile={profile} onClose={() => setMissedSaleOpen(false)} />
+      )}
+
+      {/* Pricing Feedback Modal */}
+      {pricingFeedbackOpen && profile && (
+        <PricingFeedbackModal profile={profile} onClose={() => setPricingFeedbackOpen(false)} />
+      )}
+
+      {/* Credit Note Modal — staff only (never shown to admins) */}
+      {creditNoteOpen && profile && !isAdmin && (
+        <CreditNoteModal profile={profile} onClose={() => setCreditNoteOpen(false)} />
       )}
     </div>
   )
