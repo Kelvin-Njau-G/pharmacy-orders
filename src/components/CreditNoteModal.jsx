@@ -128,6 +128,9 @@ export default function CreditNoteModal({ profile, onClose }) {
                     focus:outline-none focus:ring-2 focus:ring-brand"
                 />
               </div>
+              <p className="text-xs text-gray-400 mt-1">
+                This cannot be more than the value of the billed amount in the indicated HMIS order for this product.
+              </p>
             </div>
 
             {/* Stock Quantity */}
@@ -139,12 +142,12 @@ export default function CreditNoteModal({ profile, onClose }) {
                 type="text"
                 value={stockQty}
                 onChange={e => setStockQty(e.target.value)}
-                placeholder="e.g. 10 tablets, 2 packs of 100ml"
+                placeholder="e.g. 10 tablets, 1 pack of 10'S"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
                   focus:outline-none focus:ring-2 focus:ring-brand"
               />
               <p className="text-xs text-gray-400 mt-1">
-                The stock quantity to be adjusted, specifying the units/pack size.
+                The stock quantity to be adjusted, specifying the units/pack size. If this credit note does not also require a stock adjustment, leave this blank.
               </p>
             </div>
 
