@@ -1,6 +1,18 @@
 import { useState } from 'react'
 import ProductSearch from './ProductSearch'
 
+function formatTimestamp() {
+  const now = new Date()
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  const dd   = String(now.getDate()).padStart(2, '0')
+  const mon  = months[now.getMonth()]
+  const yyyy = now.getFullYear()
+  const hh   = String(now.getHours()).padStart(2, '0')
+  const mm   = String(now.getMinutes()).padStart(2, '0')
+  const ss   = String(now.getSeconds()).padStart(2, '0')
+  return `${dd}-${mon}-${yyyy} ${hh}:${mm}:${ss}`
+}
+
 export default function PricingFeedbackModal({ profile, onClose }) {
   const [product,  setProduct]  = useState(null)
   const [category, setCategory] = useState('')
@@ -21,7 +33,7 @@ export default function PricingFeedbackModal({ profile, onClose }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          'Added Time':              new Date().toISOString(),
+          'Added Time':              formatTimestamp(),
           'Pharmacy Name':           profile.pharmacy_location,
           "Respondent's Name":       profile.full_name,
           'SKU':                     product.sku,
