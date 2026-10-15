@@ -27,7 +27,7 @@ export default function CreditNoteModal({ profile, onClose }) {
           'Pharmacy Name':     profile.pharmacy_location,
           "Respondent's Name": profile.full_name,
           'SKU':               product.sku,
-          'Product Name':      product.product_name,
+          'Product Name':      product.name,
           'HMIS Order Number': hmisOrder.trim(),
           'Credit Amount KES': Number(amount),
           'Reason':            reason.trim(),
@@ -76,9 +76,8 @@ export default function CreditNoteModal({ profile, onClose }) {
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Product</label>
               <ProductSearch
-                value={product}
-                onChange={setProduct}
-                placeholder="Search by name or SKU…"
+                value={product?.name}
+                onSelect={setProduct}
               />
             </div>
 
