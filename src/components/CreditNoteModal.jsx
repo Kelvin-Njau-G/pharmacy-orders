@@ -17,6 +17,7 @@ export default function CreditNoteModal({ profile, onClose }) {
   const [product,     setProduct]     = useState(null)
   const [hmisOrder,   setHmisOrder]   = useState('')
   const [amount,      setAmount]      = useState('')
+  const [stockQty,    setStockQty]    = useState('')
   const [reason,      setReason]      = useState('')
   const [busy,        setBusy]        = useState(false)
   const [error,       setError]       = useState('')
@@ -42,6 +43,7 @@ export default function CreditNoteModal({ profile, onClose }) {
           'Product Name':      product.name,
           'HMIS Order Number': hmisOrder.trim(),
           'Credit Amount KES': Number(amount),
+          'Stock Quantity':    stockQty.trim(),
           'Reason':            reason.trim(),
         }),
       })
@@ -126,6 +128,24 @@ export default function CreditNoteModal({ profile, onClose }) {
                     focus:outline-none focus:ring-2 focus:ring-brand"
                 />
               </div>
+            </div>
+
+            {/* Stock Quantity */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">
+                Stock Quantity
+              </label>
+              <input
+                type="text"
+                value={stockQty}
+                onChange={e => setStockQty(e.target.value)}
+                placeholder="e.g. 10 tablets, 2 packs of 100ml"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium
+                  focus:outline-none focus:ring-2 focus:ring-brand"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                The stock quantity to be adjusted, specifying the units/pack size.
+              </p>
             </div>
 
             {/* Reason */}
