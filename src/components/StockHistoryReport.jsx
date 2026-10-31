@@ -604,12 +604,14 @@ export default function StockHistoryReport() {
     for (const o of filteredAccOrders) {
       const skuMap = accSkuMaps[o.pharmacy_location]
       if (!skuMap || !o.submitted_at) continue
-      // Only flag orders placed more than 30 days ago — items from recent orders
-      // haven't had enough time to sell yet
-      if (new Date(o.submitted_at) > thirtyDaysAgo) continue
       for (const it of o.order_items) {
         const d = skuMap[it.sku]
-        if (!d?.lastRestockDate || new Date(d.lastRestockDate) < new Date(o.submitted_at)) continue
+        // lastRestockDate is the supply date we display — it must be 30+ days ago
+        // and must be on or after the order was submitted (confirming the restock
+        // was caused by this order, not an earlier or later one)
+        if (!d?.lastRestockDate) continue
+        if (new Date(d.lastRestockDate) > thirtyDaysAgo) continue
+        if (new Date(d.lastRestockDate) < new Date(o.submitted_at)) continue
         if (d.salesSinceRestock === 0) {
           const qty       = Number(it.order_quantity) || 0
           const unitPrice = Number(it.unit_price)    || 0
