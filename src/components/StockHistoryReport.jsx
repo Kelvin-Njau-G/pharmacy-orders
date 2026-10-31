@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 const kes = new Intl.NumberFormat('en-KE', {
@@ -15,6 +16,10 @@ function fmtCompact(n) {
 function fmtWeek(str) {
   if (!str) return '—'
   return new Date(str).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })
+}
+function fmtDate(str) {
+  if (!str) return '—'
+  return new Date(str).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 // ── Class vocabulary ─────────────────────────────────────────────────────────
@@ -33,6 +38,13 @@ const PERIODS = [
 // A class change is only meaningful once the 90-day ABC window has had time
 // to turn over, so 4 weeks is the default rather than the shortest span.
 const DEFAULT_PERIOD = 4
+
+const ACC_PERIODS = [
+  { id: 30,  label: '30d' },
+  { id: 90,  label: '90d' },
+  { id: 180, label: '6mo' },
+  { id: 0,   label: 'All' },
+]
 
 function Spinner() {
   return (
@@ -130,6 +142,10 @@ function Matrix({ cells, metric, onSelect, selected }) {
     if (!amount) return 'text-gray-300'
     const weight = Math.min(1, amount / movedMax)
     const step = weight > 0.66 ? 3 : weight > 0.33 ? 2 : 1
+    // Domain overrides: newly stocked into slow classes = bad; de-stocked from slow classes = good
+    if (f === 'N' && t === 'C') return 'bg-red-100 text-red-700'
+    if (f === 'N' && t === 'D') return 'bg-red-600 text-white'
+    if ((f === 'C' || f === 'D') && t === 'N') return ['bg-brand-light text-brand-dark', 'bg-brand-light text-brand-dark', 'bg-brand text-white'][step - 1]
     const improved = RANK[t] < RANK[f]
     if (improved) return ['bg-brand-light text-brand-dark', 'bg-brand-light text-brand-dark',
                           'bg-brand text-white'][step - 1]
@@ -186,7 +202,7 @@ function Matrix({ cells, metric, onSelect, selected }) {
                         ${isSel ? 'ring-2 ring-offset-1 ring-gray-800' : ''}`}>
                       <span className="block text-sm font-bold tabular-nums">{amount ? show(amount) : '·'}</span>
                       <span className="block text-[10px] opacity-70 tabular-nums">
-                        {cell.skus ? `${cell.skus} sku` : '\u00A0'}
+                        {cell.skus ? `${cell.skus} sku` : ' '}
                       </span>
                     </button>
                   </td>
@@ -267,6 +283,124 @@ function Detail({ rows, loading, selection, onClose }) {
   )
 }
 
+// ── Sell-through accountability sub-components ────────────────────────────────
+function StPct({ v }) {
+  if (v == null) return <td className="px-4 py-2.5 text-center text-gray-400 tabular-nums">—</td>
+  const color = v >= 90 ? 'text-green-600' : v >= 60 ? 'text-amber-600' : 'text-red-500'
+  return <td className={`px-4 py-2.5 text-center font-bold tabular-nums ${color}`}>{v}%</td>
+}
+
+function StaffTable({ rows }) {
+  if (!rows.length) return <Empty title="No processed orders in this period" body="Adjust the time window above to see data." />
+  return (
+    <div className="overflow-x-auto rounded-lg border border-gray-200">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr className="text-left text-[10px] uppercase tracking-wide text-gray-500">
+            <th className="px-4 py-2.5 font-bold">Staff</th>
+            <th className="px-4 py-2.5 font-bold">Facility</th>
+            <th className="px-4 py-2.5 font-bold text-right">Orders</th>
+            <th className="px-4 py-2.5 font-bold text-right">SKUs ordered</th>
+            <th className="px-4 py-2.5 font-bold text-right">Supplied</th>
+            <th className="px-4 py-2.5 font-bold text-right">Sold</th>
+            <th className="px-4 py-2.5 font-bold text-center">Sell-through</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {rows.map((r, i) => (
+            <tr key={i} className="hover:bg-gray-50">
+              <td className="px-4 py-2.5 font-medium text-gray-800">{r.name}</td>
+              <td className="px-4 py-2.5 text-gray-500">{r.fac}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{r.orders}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{r.skusOrdered}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{r.skusSupplied}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{r.skusSold}</td>
+              <StPct v={r.sellThrough} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ReasonTable({ rows }) {
+  if (!rows.length) return <Empty title="No processed orders in this period" body="Adjust the time window above to see data." />
+  return (
+    <div className="overflow-x-auto rounded-lg border border-gray-200">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr className="text-left text-[10px] uppercase tracking-wide text-gray-500">
+            <th className="px-4 py-2.5 font-bold">Reason for ordering</th>
+            <th className="px-4 py-2.5 font-bold text-right">SKUs ordered</th>
+            <th className="px-4 py-2.5 font-bold text-right">Supplied</th>
+            <th className="px-4 py-2.5 font-bold text-right">Sold</th>
+            <th className="px-4 py-2.5 font-bold text-center">Sell-through</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {rows.map((r, i) => (
+            <tr key={i} className="hover:bg-gray-50">
+              <td className="px-4 py-2.5 font-medium text-gray-800">{r.reason}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{r.skusOrdered}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{r.skusSupplied}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{r.skusSold}</td>
+              <StPct v={r.sellThrough} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function UnsoldTable({ rows }) {
+  if (!rows.length) return (
+    <div className="border border-dashed border-green-200 rounded-lg py-16 px-6 text-center bg-green-50">
+      <p className="text-sm font-bold text-green-700">No unsold items in this period 🎉</p>
+      <p className="text-sm text-green-600 mt-1">All supplied SKUs have recorded at least one sale.</p>
+    </div>
+  )
+  return (
+    <>
+      <p className="text-xs text-gray-500 mb-3">
+        Items supplied but with zero sales since restocking — forward to relevant staff for explanation.{' '}
+        <span className="font-bold text-gray-700">{rows.length} SKU{rows.length !== 1 ? 's' : ''}</span> need explanation.
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr className="text-left text-[10px] uppercase tracking-wide text-gray-500">
+              <th className="px-4 py-2.5 font-bold">SKU</th>
+              <th className="px-4 py-2.5 font-bold">Product</th>
+              <th className="px-4 py-2.5 font-bold">Facility</th>
+              <th className="px-4 py-2.5 font-bold">Ordered by</th>
+              <th className="px-4 py-2.5 font-bold">Reason</th>
+              <th className="px-4 py-2.5 font-bold">Order</th>
+              <th className="px-4 py-2.5 font-bold">Date</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {rows.map((r, i) => (
+              <tr key={i} className="hover:bg-amber-50">
+                <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{r.sku}</td>
+                <td className="px-4 py-2.5 font-medium text-gray-800">{r.name}</td>
+                <td className="px-4 py-2.5 text-gray-500">{r.fac}</td>
+                <td className="px-4 py-2.5 text-gray-700">{r.staff}</td>
+                <td className="px-4 py-2.5 text-gray-500">{r.reason}</td>
+                <td className="px-4 py-2.5 font-mono text-xs text-gray-500">
+                  #{String(r.orderNo || 0).padStart(4, '0')}
+                </td>
+                <td className="px-4 py-2.5 text-gray-500">{fmtDate(r.date)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function StockHistoryReport() {
   const [locations, setLocations] = useState([])
@@ -284,6 +418,13 @@ export default function StockHistoryReport() {
   const [selection,  setSelection]  = useState(null)
   const [detail,     setDetail]     = useState([])
   const [detailBusy, setDetailBusy] = useState(false)
+
+  // ── Accountability state ─────────────────────────────────────────────────
+  const [accOrders,  setAccOrders]  = useState([])
+  const [accSkuMaps, setAccSkuMaps] = useState({})
+  const [accLoading, setAccLoading] = useState(false)
+  const [accPeriod,  setAccPeriod]  = useState(90)   // days; 0 = all time
+  const [accTab,     setAccTab]     = useState('staff')
 
   const locationIds = locationId === 'all' ? null : [Number(locationId)]
 
@@ -329,6 +470,110 @@ export default function StockHistoryReport() {
     setDetailBusy(false)
   }
 
+  // ── Accountability data loading ──────────────────────────────────────────
+  async function loadAccountability(days) {
+    setAccLoading(true)
+    try {
+      let q = supabase
+        .from('orders')
+        .select('id, order_number, pharmacy_location, submitted_at, profiles(full_name)')
+        .eq('status', 'Processed')
+        .order('submitted_at', { ascending: false })
+        .limit(500)
+      if (days > 0) {
+        q = q.gte('submitted_at', new Date(Date.now() - days * 86400000).toISOString())
+      }
+      const { data: orders } = await q
+      if (!orders?.length) { setAccOrders([]); setAccSkuMaps({}); return }
+
+      const { data: items } = await supabase
+        .from('order_items')
+        .select('order_id, sku, product_name, reason_for_ordering')
+        .in('order_id', orders.map(o => o.id))
+
+      const iMap = {}
+      for (const it of (items || [])) {
+        if (!iMap[it.order_id]) iMap[it.order_id] = []
+        iMap[it.order_id].push(it)
+      }
+      setAccOrders(orders.map(o => ({ ...o, order_items: iMap[o.id] || [] })))
+
+      const facs = [...new Set(orders.map(o => o.pharmacy_location).filter(Boolean))]
+      const maps = await Promise.all(facs.map(async fac => [fac, await fetchSellThrough(fac)]))
+      setAccSkuMaps(Object.fromEntries(maps))
+    } finally {
+      setAccLoading(false)
+    }
+  }
+
+  useEffect(() => { if (!loading) loadAccountability(accPeriod) }, [loading, accPeriod])
+
+  // ── Accountability computed values ───────────────────────────────────────
+  const byStaff = useMemo(() => {
+    const map = {}
+    for (const o of accOrders) {
+      const name = o.profiles?.full_name || 'Unknown'
+      const fac  = o.pharmacy_location || '—'
+      const key  = `${name}\0${fac}`
+      if (!map[key]) map[key] = { name, fac, orders: 0, skusOrdered: 0, skusSupplied: 0, skusSold: 0 }
+      const m = computeMetrics(o.order_items, accSkuMaps[fac], o.submitted_at)
+      map[key].orders++
+      map[key].skusOrdered  += m.skusOrdered
+      map[key].skusSupplied += m.skusSupplied
+      map[key].skusSold     += m.skusSold
+    }
+    return Object.values(map)
+      .map(v => ({ ...v, sellThrough: v.skusSupplied > 0 ? Math.round(v.skusSold / v.skusSupplied * 100) : null }))
+      .sort((a, b) => (a.sellThrough ?? -1) - (b.sellThrough ?? -1))
+  }, [accOrders, accSkuMaps])
+
+  const byReason = useMemo(() => {
+    const map = {}
+    for (const o of accOrders) {
+      const skuMap = accSkuMaps[o.pharmacy_location]
+      for (const it of o.order_items) {
+        const reason = it.reason_for_ordering || 'Not specified'
+        if (!map[reason]) map[reason] = { reason, skusOrdered: 0, skusSupplied: 0, skusSold: 0 }
+        map[reason].skusOrdered++
+        if (skuMap && o.submitted_at) {
+          const d = skuMap[it.sku]
+          if (d?.lastRestockDate && new Date(d.lastRestockDate) >= new Date(o.submitted_at)) {
+            map[reason].skusSupplied++
+            if (d.salesSinceRestock > 0) map[reason].skusSold++
+          }
+        }
+      }
+    }
+    return Object.values(map)
+      .map(v => ({ ...v, sellThrough: v.skusSupplied > 0 ? Math.round(v.skusSold / v.skusSupplied * 100) : null }))
+      .sort((a, b) => b.skusOrdered - a.skusOrdered)
+  }, [accOrders, accSkuMaps])
+
+  const unsoldItems = useMemo(() => {
+    const out = []
+    for (const o of accOrders) {
+      const skuMap = accSkuMaps[o.pharmacy_location]
+      if (!skuMap || !o.submitted_at) continue
+      for (const it of o.order_items) {
+        const d = skuMap[it.sku]
+        if (!d?.lastRestockDate || new Date(d.lastRestockDate) < new Date(o.submitted_at)) continue
+        if (d.salesSinceRestock === 0) {
+          out.push({
+            sku:     it.sku || '—',
+            name:    it.product_name || '—',
+            fac:     o.pharmacy_location,
+            staff:   o.profiles?.full_name || 'Unknown',
+            orderNo: o.order_number,
+            date:    o.submitted_at,
+            reason:  it.reason_for_ordering || '—',
+          })
+        }
+      }
+    }
+    return out.sort((a, b) => a.fac.localeCompare(b.fac) || (a.name || '').localeCompare(b.name || ''))
+  }, [accOrders, accSkuMaps])
+
+  // ── Trend/matrix computed values ─────────────────────────────────────────
   const visibleTrend = useMemo(
     () => (locationId === 'all' ? trendRows : trendRows.filter(r => r.location_id === Number(locationId))),
     [trendRows, locationId],
@@ -438,7 +683,7 @@ export default function StockHistoryReport() {
           </section>
 
           {/* Matrix */}
-          <section>
+          <section className="mb-10">
             <div className="flex items-baseline justify-between mb-1">
               <h2 className="text-sm font-bold text-gray-800">What moved between classes</h2>
               {cells.length > 0 && (
@@ -448,10 +693,9 @@ export default function StockHistoryReport() {
               )}
             </div>
             <p className="text-xs text-gray-500 mb-4 max-w-2xl">
-              Blue is stock that moved to a faster-selling class, red is stock that slowed down.
-              The diagonal stayed put. Classification uses a rolling 90-day window, so read the value
-              in a cell before its SKU count — a product sitting on a class boundary will cross it
-              on ordinary sales variation.
+              Blue = moving to a faster-selling class (good) or de-stocked from slow classes.
+              Red = slowing down. Items newly stocked into C are <span className="font-semibold text-red-600">light red</span>; into D are <span className="font-semibold text-red-700">dark red</span> (poor ordering choices).
+              The diagonal stayed put.
             </p>
 
             {busy ? <Spinner /> : cells.length === 0 ? (
@@ -465,6 +709,50 @@ export default function StockHistoryReport() {
                 <p className="text-xs text-gray-400 mt-3">Select any cell to see the products behind it.</p>
                 <Detail rows={detail} loading={detailBusy} selection={selection}
                         onClose={() => { setSelection(null); setDetail([]) }} />
+              </>
+            )}
+          </section>
+
+          {/* Sell-through accountability */}
+          <section>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h2 className="text-sm font-bold text-gray-800">Sell-through accountability</h2>
+              <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+                {ACC_PERIODS.map(p => (
+                  <button key={p.id} onClick={() => setAccPeriod(p.id)}
+                    className={`px-3 py-1.5 text-xs font-bold transition-colors focus:outline-none
+                      ${accPeriod === p.id ? 'bg-brand text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Sub-tabs */}
+            <div className="flex border-b border-gray-200 mb-5">
+              {[
+                ['staff',  'By staff'],
+                ['reason', 'By reason'],
+                ['unsold', 'Unsold items'],
+              ].map(([id, label]) => (
+                <button key={id} onClick={() => setAccTab(id)}
+                  className={`px-4 py-2 text-sm font-bold border-b-2 -mb-px transition-colors focus:outline-none
+                    ${accTab === id ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  {label}
+                  {id === 'unsold' && unsoldItems.length > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.1rem] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold">
+                      {unsoldItems.length > 99 ? '99+' : unsoldItems.length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {accLoading ? <Spinner /> : (
+              <>
+                {accTab === 'staff'  && <StaffTable  rows={byStaff} />}
+                {accTab === 'reason' && <ReasonTable rows={byReason} />}
+                {accTab === 'unsold' && <UnsoldTable rows={unsoldItems} />}
               </>
             )}
           </section>
