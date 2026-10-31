@@ -354,19 +354,44 @@ function ReasonTable({ rows }) {
   )
 }
 
-function UnsoldTable({ rows }) {
+function downloadUnsoldCsv(rows) {
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const headers = ['SKU', 'Product', 'Facility', 'Ordered by', 'Reason', 'Order #', 'Date supplied', 'Qty ordered', 'Unit price (KES)', 'Value (KES)']
+  const body = rows.map(r => [
+    r.sku, r.name, r.fac, r.staff, r.reason,
+    `#${String(r.orderNo || 0).padStart(4, '0')}`,
+    r.restockDate ? new Date(r.restockDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }) : '—',
+    r.qty, r.unitPrice, r.value,
+  ].map(esc).join(','))
+  const csv = [headers.map(esc).join(','), ...body].join('\n')
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+  const url  = URL.createObjectURL(blob)
+  const a    = Object.assign(document.createElement('a'), { href: url, download: `unsold-items-${new Date().toISOString().slice(0, 10)}.csv` })
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+function UnsoldTable({ rows, onDownload }) {
   if (!rows.length) return (
     <div className="border border-dashed border-green-200 rounded-lg py-16 px-6 text-center bg-green-50">
-      <p className="text-sm font-bold text-green-700">No unsold items in this period 🎉</p>
-      <p className="text-sm text-green-600 mt-1">All supplied SKUs have recorded at least one sale.</p>
+      <p className="text-sm font-bold text-green-700">No unsold items supplied 30+ days ago 🎉</p>
+      <p className="text-sm text-green-600 mt-1">All supplied SKUs (restocked at least 30 days ago) have recorded at least one sale.</p>
     </div>
   )
+  const totalValue = rows.reduce((s, r) => s + (r.value || 0), 0)
   return (
     <>
-      <p className="text-xs text-gray-500 mb-3">
-        Items supplied but with zero sales since restocking — forward to relevant staff for explanation.{' '}
-        <span className="font-bold text-gray-700">{rows.length} SKU{rows.length !== 1 ? 's' : ''}</span> need explanation.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <p className="text-xs text-gray-500">
+          Supplied 30+ days ago, zero sales — forward to relevant staff for explanation.{' '}
+          <span className="font-bold text-gray-700">{rows.length} SKU{rows.length !== 1 ? 's' : ''}</span>
+          {totalValue > 0 && <> · <span className="font-bold text-red-600">{fmt(totalValue)}</span> locked up</>}
+        </p>
+        <button onClick={onDownload}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand transition-colors">
+          ↓ Download CSV
+        </button>
+      </div>
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
@@ -377,7 +402,10 @@ function UnsoldTable({ rows }) {
               <th className="px-4 py-2.5 font-bold">Ordered by</th>
               <th className="px-4 py-2.5 font-bold">Reason</th>
               <th className="px-4 py-2.5 font-bold">Order</th>
-              <th className="px-4 py-2.5 font-bold">Date</th>
+              <th className="px-4 py-2.5 font-bold">Date supplied</th>
+              <th className="px-4 py-2.5 font-bold text-right">Qty</th>
+              <th className="px-4 py-2.5 font-bold text-right">Unit price</th>
+              <th className="px-4 py-2.5 font-bold text-right">Value</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -391,10 +419,19 @@ function UnsoldTable({ rows }) {
                 <td className="px-4 py-2.5 font-mono text-xs text-gray-500">
                   #{String(r.orderNo || 0).padStart(4, '0')}
                 </td>
-                <td className="px-4 py-2.5 text-gray-500">{fmtDate(r.date)}</td>
+                <td className="px-4 py-2.5 text-gray-500">{fmtDate(r.restockDate)}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{r.qty || '—'}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{r.unitPrice ? fmt(r.unitPrice) : '—'}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums font-bold text-gray-800">{r.value ? fmt(r.value) : '—'}</td>
               </tr>
             ))}
           </tbody>
+          <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+            <tr>
+              <td colSpan={9} className="px-4 py-2.5 text-xs font-bold text-gray-600 text-right">Total value locked up</td>
+              <td className="px-4 py-2.5 text-right tabular-nums font-bold text-red-600">{fmt(totalValue)}</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </>
@@ -420,11 +457,12 @@ export default function StockHistoryReport() {
   const [detailBusy, setDetailBusy] = useState(false)
 
   // ── Accountability state ─────────────────────────────────────────────────
-  const [accOrders,  setAccOrders]  = useState([])
-  const [accSkuMaps, setAccSkuMaps] = useState({})
-  const [accLoading, setAccLoading] = useState(false)
-  const [accPeriod,  setAccPeriod]  = useState(90)   // days; 0 = all time
-  const [accTab,     setAccTab]     = useState('staff')
+  const [accOrders,    setAccOrders]    = useState([])
+  const [accSkuMaps,   setAccSkuMaps]   = useState({})
+  const [accLoading,   setAccLoading]   = useState(false)
+  const [accPeriod,    setAccPeriod]    = useState(90)   // days; 0 = all time
+  const [accTab,       setAccTab]       = useState('staff')
+  const [accFacFilter, setAccFacFilter] = useState('all')
 
   const locationIds = locationId === 'all' ? null : [Number(locationId)]
 
@@ -488,7 +526,7 @@ export default function StockHistoryReport() {
 
       const { data: items } = await supabase
         .from('order_items')
-        .select('order_id, sku, product_name, reason_for_ordering')
+        .select('order_id, sku, product_name, reason_for_ordering, qty_ordered, unit_price')
         .in('order_id', orders.map(o => o.id))
 
       const iMap = {}
@@ -509,9 +547,20 @@ export default function StockHistoryReport() {
   useEffect(() => { if (!loading) loadAccountability(accPeriod) }, [loading, accPeriod])
 
   // ── Accountability computed values ───────────────────────────────────────
+  // Unique facilities present in the loaded orders (for the filter dropdown)
+  const accFacilities = useMemo(() =>
+    [...new Set(accOrders.map(o => o.pharmacy_location).filter(Boolean))].sort(),
+    [accOrders],
+  )
+
+  const filteredAccOrders = useMemo(() =>
+    accFacFilter === 'all' ? accOrders : accOrders.filter(o => o.pharmacy_location === accFacFilter),
+    [accOrders, accFacFilter],
+  )
+
   const byStaff = useMemo(() => {
     const map = {}
-    for (const o of accOrders) {
+    for (const o of filteredAccOrders) {
       const name = o.profiles?.full_name || 'Unknown'
       const fac  = o.pharmacy_location || '—'
       const key  = `${name}\0${fac}`
@@ -525,11 +574,11 @@ export default function StockHistoryReport() {
     return Object.values(map)
       .map(v => ({ ...v, sellThrough: v.skusSupplied > 0 ? Math.round(v.skusSold / v.skusSupplied * 100) : null }))
       .sort((a, b) => (a.sellThrough ?? -1) - (b.sellThrough ?? -1))
-  }, [accOrders, accSkuMaps])
+  }, [filteredAccOrders, accSkuMaps])
 
   const byReason = useMemo(() => {
     const map = {}
-    for (const o of accOrders) {
+    for (const o of filteredAccOrders) {
       const skuMap = accSkuMaps[o.pharmacy_location]
       for (const it of o.order_items) {
         const reason = it.reason_for_ordering || 'Not specified'
@@ -547,31 +596,40 @@ export default function StockHistoryReport() {
     return Object.values(map)
       .map(v => ({ ...v, sellThrough: v.skusSupplied > 0 ? Math.round(v.skusSold / v.skusSupplied * 100) : null }))
       .sort((a, b) => b.skusOrdered - a.skusOrdered)
-  }, [accOrders, accSkuMaps])
+  }, [filteredAccOrders, accSkuMaps])
 
   const unsoldItems = useMemo(() => {
     const out = []
-    for (const o of accOrders) {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000)
+    for (const o of filteredAccOrders) {
       const skuMap = accSkuMaps[o.pharmacy_location]
       if (!skuMap || !o.submitted_at) continue
       for (const it of o.order_items) {
         const d = skuMap[it.sku]
         if (!d?.lastRestockDate || new Date(d.lastRestockDate) < new Date(o.submitted_at)) continue
+        // Only flag items that have had at least 30 days to sell
+        if (new Date(d.lastRestockDate) > thirtyDaysAgo) continue
         if (d.salesSinceRestock === 0) {
+          const qty       = Number(it.qty_ordered)  || 0
+          const unitPrice = Number(it.unit_price)    || 0
           out.push({
-            sku:     it.sku || '—',
-            name:    it.product_name || '—',
-            fac:     o.pharmacy_location,
-            staff:   o.profiles?.full_name || 'Unknown',
-            orderNo: o.order_number,
-            date:    o.submitted_at,
-            reason:  it.reason_for_ordering || '—',
+            sku:         it.sku || '—',
+            name:        it.product_name || '—',
+            fac:         o.pharmacy_location,
+            staff:       o.profiles?.full_name || 'Unknown',
+            orderNo:     o.order_number,
+            date:        o.submitted_at,
+            restockDate: d.lastRestockDate,
+            reason:      it.reason_for_ordering || '—',
+            qty,
+            unitPrice,
+            value:       qty * unitPrice,
           })
         }
       }
     }
     return out.sort((a, b) => a.fac.localeCompare(b.fac) || (a.name || '').localeCompare(b.name || ''))
-  }, [accOrders, accSkuMaps])
+  }, [filteredAccOrders, accSkuMaps])
 
   // ── Trend/matrix computed values ─────────────────────────────────────────
   const visibleTrend = useMemo(
@@ -717,14 +775,25 @@ export default function StockHistoryReport() {
           <section>
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h2 className="text-sm font-bold text-gray-800">Sell-through accountability</h2>
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden">
-                {ACC_PERIODS.map(p => (
-                  <button key={p.id} onClick={() => setAccPeriod(p.id)}
-                    className={`px-3 py-1.5 text-xs font-bold transition-colors focus:outline-none
-                      ${accPeriod === p.id ? 'bg-brand text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                    {p.label}
-                  </button>
-                ))}
+              <div className="flex flex-wrap items-center gap-2">
+                {accFacilities.length > 1 && (
+                  <select value={accFacFilter} onChange={e => setAccFacFilter(e.target.value)}
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-brand">
+                    <option value="all">All facilities</option>
+                    {accFacilities.map(fac => (
+                      <option key={fac} value={fac}>{fac}</option>
+                    ))}
+                  </select>
+                )}
+                <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+                  {ACC_PERIODS.map(p => (
+                    <button key={p.id} onClick={() => setAccPeriod(p.id)}
+                      className={`px-3 py-1.5 text-xs font-bold transition-colors focus:outline-none
+                        ${accPeriod === p.id ? 'bg-brand text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -752,7 +821,7 @@ export default function StockHistoryReport() {
               <>
                 {accTab === 'staff'  && <StaffTable  rows={byStaff} />}
                 {accTab === 'reason' && <ReasonTable rows={byReason} />}
-                {accTab === 'unsold' && <UnsoldTable rows={unsoldItems} />}
+                {accTab === 'unsold' && <UnsoldTable rows={unsoldItems} onDownload={() => downloadUnsoldCsv(unsoldItems)} />}
               </>
             )}
           </section>
