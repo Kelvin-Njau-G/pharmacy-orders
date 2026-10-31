@@ -23,13 +23,8 @@ const REASONS = [
 const BLANK_ITEM = {
   product_name: '', sku: '', unit_price: '',
   order_quantity: '', current_available_stock: '', reason_for_ordering: '',
-  patient_phone: '',
   _error: null, _hmisVariance: null, _hmisConfirmed: false,
-  _phoneWarning: null, _phoneError: null,
 }
-
-// Kenyan mobile: 07XX XXX XXX / 01XX XXX XXX (10 digits) or +2547… / +2541…
-const PHONE_RE = /^(\+?254|0)(7|1)\d{8}$/
 
 function fmt(n) {
   const v = parseFloat(n)
@@ -71,6 +66,7 @@ export default function OrderForm() {
   const [items,     setItems]     = useState([{ ...BLANK_ITEM, _key: 1 }])
   const [loading,   setLoading]   = useState(!isNew)
   const [saving,       setSaving]       = useState(false)
+  const [dupSupBlock,  setDupSupBlock]  = useState(null)  // existing order id if blocked
   const [viewMode,     setViewMode]     = useState('edit')  // 'edit' | 'list'
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [outOfStockSkus,  setOutOfStockSkus]  = useState(new Set())
@@ -168,6 +164,25 @@ export default function OrderForm() {
 
   useEffect(() => { if (isAdmin && isNew) navigate('/admin', { replace: true }) }, [isAdmin, isNew])
 
+  // ── Block duplicate supplementary orders ────────────────────────────────────
+  // The Dashboard button is disabled when one exists, but staff can bypass it by
+  // navigating directly to /orders/new. This check enforces the rule at the form level.
+  useEffect(() => {
+    if (!isNew || !profile?.pharmacy_location) return
+    const type = prefilledType || orderType
+    if (type !== 'Supplementary Order') return
+    supabase
+      .from('orders')
+      .select('id')
+      .eq('pharmacy_location', profile.pharmacy_location)
+      .eq('order_type', 'Supplementary Order')
+      .in('status', ['Draft', 'Submitted'])
+      .limit(1)
+      .then(({ data }) => {
+        if (data?.length) setDupSupBlock(data[0].id)
+      })
+  }, [isNew, profile?.pharmacy_location, prefilledType, orderType])
+
   const readOnly = isAdmin || (!!order && order.status !== 'Draft')
 
   useEffect(() => { if (!isNew) load() }, [id])
@@ -195,8 +210,6 @@ export default function OrderForm() {
         ? data.order_items.map((it, i) => ({
             ...it, _key: i, _error: null, _hmisVariance: null,
             _hmisConfirmed: it.hmis_variance_confirmed || false,
-            patient_phone: it.patient_phone || '',
-            _phoneWarning: null, _phoneError: null,
           }))
         : [{ ...BLANK_ITEM, _key: 1 }]
     )
@@ -354,77 +367,9 @@ export default function OrderForm() {
 
   function handleReasonChange(key, value) {
     setItems(prev => {
-      const base = prev.map(it => {
-        if (it._key !== key) return it
-        const updated = { ...it, reason_for_ordering: value }
-        // Clear patient phone data when switching away from Patient Request
-        if (value !== 'Patient Request') {
-          updated.patient_phone = ''
-          updated._phoneWarning = null
-          updated._phoneError = null
-        }
-        return updated
-      })
+      const base = prev.map(it => it._key === key ? { ...it, reason_for_ordering: value } : it)
       return revalidateAll(base)
     })
-  }
-
-  function handlePhoneChange(key, value) {
-    setItems(prev => prev.map(it =>
-      it._key === key ? { ...it, patient_phone: value, _phoneWarning: null, _phoneError: null } : it
-    ))
-  }
-
-  async function handlePhoneBlur(key, value) {
-    const phone = value.replace(/\s/g, '')
-    if (!phone) return
-    // Format check first
-    if (!PHONE_RE.test(phone)) {
-      setItems(prev => prev.map(it =>
-        it._key === key
-          ? { ...it, _phoneError: 'Enter a valid Kenyan mobile number (e.g. 0712 345 678 or +254712345678).' }
-          : it
-      ))
-      return
-    }
-    // Format valid — clear any format error, then run the 30-day reuse check
-    setItems(prev => prev.map(it => it._key === key ? { ...it, _phoneError: null } : it))
-    try {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      const currentOrderId = order?.id || '00000000-0000-0000-0000-000000000000'
-      // Step 1: orders at this facility submitted in the last 30 days (excluding the current order)
-      const { data: facilityOrders } = await supabase
-        .from('orders')
-        .select('id, order_number, submitted_at')
-        .eq('pharmacy_location', profile.pharmacy_location)
-        .gte('submitted_at', thirtyDaysAgo)
-        .neq('id', currentOrderId)
-      if (!facilityOrders || facilityOrders.length === 0) return
-      const orderIds = facilityOrders.map(o => o.id)
-      // Step 2: check whether this phone appears in any of those orders
-      const { data: phoneMatches } = await supabase
-        .from('order_items')
-        .select('order_id, patient_phone')
-        .eq('patient_phone', phone)
-        .in('order_id', orderIds)
-        .limit(1)
-      if (phoneMatches && phoneMatches.length > 0) {
-        const matchedOrder = facilityOrders.find(o => o.id === phoneMatches[0].order_id)
-        const dateStr = matchedOrder?.submitted_at
-          ? new Date(matchedOrder.submitted_at).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' })
-          : 'recently'
-        const orderNum = matchedOrder?.order_number
-          ? `#${String(matchedOrder.order_number).padStart(4, '0')}`
-          : 'a recent order'
-        setItems(prev => prev.map(it =>
-          it._key === key
-            ? { ...it, _phoneWarning: `This number was used in order ${orderNum} on ${dateStr} at this facility. Proceed only if this is a genuinely new patient request.` }
-            : it
-        ))
-      }
-    } catch {
-      // Reuse check is advisory — fail silently
-    }
   }
 
   function confirmVariance(key, useSystemValue) {
@@ -472,9 +417,7 @@ export default function OrderForm() {
     it.order_quantity && parseInt(it.order_quantity) >= 1 &&
     it.reason_for_ordering &&
     !it._error &&
-    !it._phoneError &&
-    !(it._hmisVariance && !it._hmisConfirmed) &&
-    !(it.reason_for_ordering === 'Patient Request' && !it.patient_phone?.trim())
+    !(it._hmisVariance && !it._hmisConfirmed)
   )
 
   // ── Validate before save/submit ───────────────────────────────────────────────
@@ -495,20 +438,6 @@ export default function OrderForm() {
         if (!it.reason_for_ordering) { ok = false; return { ...it, _error: 'Please select a reason for ordering.' } }
         // HMIS variance must be resolved
         if (it._hmisVariance && !it._hmisConfirmed) { ok = false; return { ...it, _error: 'Please confirm your available stock quantity (or use the system value) to continue.' } }
-        // Patient Request: phone number is required and must be a valid Kenyan mobile
-        if (it.reason_for_ordering === 'Patient Request') {
-          if (!it.patient_phone?.trim()) {
-            ok = false
-            return { ...it, _phoneError: 'Patient phone number is required for Patient Request.' }
-          }
-          if (!PHONE_RE.test(it.patient_phone.replace(/\s/g, ''))) {
-            ok = false
-            return { ...it, _phoneError: 'Enter a valid Kenyan mobile number (e.g. 0712 345 678 or +254712345678).' }
-          }
-          // Phone is valid — preserve any other errors and clear stale phone error
-          if (it._error) { ok = false; return { ...it, _phoneError: null } }
-          return { ...it, _phoneError: null }
-        }
         // Preserve any validation error set by revalidateAll above
         if (it._error) { ok = false; return it }
         return it
@@ -523,6 +452,24 @@ export default function OrderForm() {
     if (!orderType) { setPageError('Please select an order type.'); return }
     if (!validate()) { setPageError('Please fix the highlighted errors below.'); return }
     setPageError(null); setSaving(true)
+
+    // Final server-side guard: re-check for an active supplementary order right
+    // before creating, in case the user loaded the form before one was submitted
+    // by a colleague, or bypassed the UI-level block.
+    if ((isNew || !order?.id) && orderType === 'Supplementary Order') {
+      const { data: existing } = await supabase
+        .from('orders').select('id')
+        .eq('pharmacy_location', profile.pharmacy_location)
+        .eq('order_type', 'Supplementary Order')
+        .in('status', ['Draft', 'Submitted'])
+        .limit(1)
+      if (existing?.length) {
+        setDupSupBlock(existing[0].id)
+        setSaving(false)
+        return
+      }
+    }
+
     const now = new Date().toISOString()
     const total = grandTotal()
     try {
@@ -548,7 +495,6 @@ export default function OrderForm() {
         order_quantity:          parseInt(it.order_quantity)            || null,
         current_available_stock: parseFloat(it.current_available_stock) || null,
         reason_for_ordering:     it.reason_for_ordering                 || null,
-        patient_phone:           it.reason_for_ordering === 'Patient Request' ? (it.patient_phone?.trim() || null) : null,
         hmis_stock_system:       validationData?.[it.sku]?.hmisStock    ?? null,
         hmis_variance_confirmed: it._hmisConfirmed || false,
       }))
@@ -642,6 +588,25 @@ export default function OrderForm() {
           )}
         </div>
 
+        {dupSupBlock && (
+          <div className="mb-6 bg-amber-50 border border-amber-300 rounded-xl px-5 py-4">
+            <p className="text-sm font-bold text-amber-800 mb-1">Active supplementary order already exists</p>
+            <p className="text-sm text-amber-700 mb-3">
+              Your facility already has a supplementary order that is pending processing.
+              It must be processed by the admin before you can create a new one.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => navigate(`/orders/${dupSupBlock}`)}
+                className="px-4 py-2 bg-brand text-white text-sm font-bold rounded-lg hover:bg-brand-dark transition-colors">
+                View existing order
+              </button>
+              <button onClick={() => navigate('/')}
+                className="px-4 py-2 bg-white border border-amber-300 text-amber-800 text-sm font-bold rounded-lg hover:bg-amber-50 transition-colors">
+                Back to dashboard
+              </button>
+            </div>
+          </div>
+        )}
         {pageError && (
           <div className="mb-4 bg-brand-red-light border border-red-200 rounded-xl px-4 py-3 text-sm text-brand-red font-medium">{pageError}</div>
         )}
@@ -842,7 +807,6 @@ export default function OrderForm() {
                         if (!it.product_name?.trim()) missing.push('product name')
                         if (!it.order_quantity || parseInt(it.order_quantity) < 1) missing.push('quantity ordered')
                         if (!it.reason_for_ordering) missing.push('reason for ordering')
-                        if (it.reason_for_ordering === 'Patient Request' && !it.patient_phone?.trim()) missing.push('patient phone number')
                         if (missing.length === 0) return null
                         return (
                           <div className="mt-1 mb-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 font-medium">
@@ -991,66 +955,13 @@ export default function OrderForm() {
                         Reason for ordering <span className="text-red-400">*</span>
                       </label>
                       {readOnly
-                        ? <>
-                            <p className="text-sm text-gray-700 font-medium">{it.reason_for_ordering || '—'}</p>
-                            {it.reason_for_ordering === 'Patient Request' && it.patient_phone && (
-                              <p className="text-xs text-gray-400 mt-0.5 font-medium">Patient phone: {it.patient_phone}</p>
-                            )}
-                          </>
-                        : <>
-                            {(() => {
-                              const prCount = items.filter(i => i.reason_for_ordering === 'Patient Request').length
-                              return (
-                                <>
-                                  <select value={it.reason_for_ordering}
-                                    onChange={e => handleReasonChange(it._key, e.target.value)}
-                                    className="w-full sm:max-w-sm px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
-                                    <option value="">Select reason…</option>
-                                    {REASONS.map(r => {
-                                      const capReached = r === 'Patient Request' && prCount >= 3 && it.reason_for_ordering !== 'Patient Request'
-                                      return (
-                                        <option key={r} value={r} disabled={capReached}>
-                                          {r}{capReached ? ' (3/3 limit reached)' : ''}
-                                        </option>
-                                      )
-                                    })}
-                                  </select>
-                                  {prCount > 0 && (
-                                    <p className="text-xs text-gray-400 mt-1 font-medium">
-                                      Patient Request: {prCount}/3 used this order
-                                    </p>
-                                  )}
-                                </>
-                              )
-                            })()}
-                            {/* Patient phone — required when Patient Request is selected */}
-                            {it.reason_for_ordering === 'Patient Request' && (
-                              <div className="mt-3">
-                                <label className={`block text-xs font-extrabold mb-1.5 uppercase tracking-wide ${
-                                  it._phoneError ? 'text-red-500' : 'text-gray-400'}`}>
-                                  Patient's Phone Number <span className="text-red-400">*</span>
-                                </label>
-                                <input
-                                  type="tel"
-                                  value={it.patient_phone}
-                                  onChange={e => handlePhoneChange(it._key, e.target.value)}
-                                  onBlur={e => handlePhoneBlur(it._key, e.target.value)}
-                                  placeholder="e.g. 0712 345 678"
-                                  className={`w-full sm:max-w-sm px-3 py-2 border rounded-lg text-sm font-medium focus:outline-none focus:ring-2 ${
-                                    it._phoneError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-brand'
-                                  }`}
-                                />
-                                {it._phoneError && (
-                                  <p className="text-xs text-red-500 mt-1 font-medium">{it._phoneError}</p>
-                                )}
-                                {it._phoneWarning && !it._phoneError && (
-                                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-                                    <p className="text-xs text-amber-800 font-medium">⚠ {it._phoneWarning}</p>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </>
+                        ? <p className="text-sm text-gray-700 font-medium">{it.reason_for_ordering || '—'}</p>
+                        : <select value={it.reason_for_ordering}
+                            onChange={e => handleReasonChange(it._key, e.target.value)}
+                            className="w-full sm:max-w-sm px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-brand bg-white">
+                            <option value="">Select reason…</option>
+                            {REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                          </select>
                       }
                     </div>
 
