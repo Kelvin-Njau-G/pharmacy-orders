@@ -526,7 +526,7 @@ export default function StockHistoryReport() {
 
       const { data: items } = await supabase
         .from('order_items')
-        .select('order_id, sku, product_name, reason_for_ordering, qty_ordered, unit_price')
+        .select('order_id, sku, product_name, reason_for_ordering, order_quantity, unit_price')
         .in('order_id', orders.map(o => o.id))
 
       const iMap = {}
@@ -604,13 +604,14 @@ export default function StockHistoryReport() {
     for (const o of filteredAccOrders) {
       const skuMap = accSkuMaps[o.pharmacy_location]
       if (!skuMap || !o.submitted_at) continue
+      // Only flag orders placed more than 30 days ago — items from recent orders
+      // haven't had enough time to sell yet
+      if (new Date(o.submitted_at) > thirtyDaysAgo) continue
       for (const it of o.order_items) {
         const d = skuMap[it.sku]
         if (!d?.lastRestockDate || new Date(d.lastRestockDate) < new Date(o.submitted_at)) continue
-        // Only flag items that have had at least 30 days to sell
-        if (new Date(d.lastRestockDate) > thirtyDaysAgo) continue
         if (d.salesSinceRestock === 0) {
-          const qty       = Number(it.qty_ordered)  || 0
+          const qty       = Number(it.order_quantity) || 0
           const unitPrice = Number(it.unit_price)    || 0
           out.push({
             sku:         it.sku || '—',
