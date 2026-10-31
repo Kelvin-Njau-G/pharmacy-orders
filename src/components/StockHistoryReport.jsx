@@ -438,6 +438,126 @@ function UnsoldTable({ rows, onDownload }) {
   )
 }
 
+// ── Core OOS % line chart ────────────────────────────────────────────────────
+const OOS_COLORS = { Stable: '#006CB5', 'Launch Phase': '#F59E0B' }
+
+function OosChart({ rows, period }) {
+  const chartData = useMemo(() => {
+    const cutoff = period === 0 ? null : new Date(Date.now() - period * 86400000)
+    const filtered = cutoff ? rows.filter(r => new Date(r.snapped_at) >= cutoff) : rows
+    const dates = [...new Set(filtered.map(r => r.snapped_at))].sort()
+    const avg = vals => vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+    const series = ['Stable', 'Launch Phase'].map(stage => ({
+      stage,
+      points: dates.map(d => {
+        const vals = filtered
+          .filter(r => r.snapped_at === d && r.facility_stage === stage)
+          .map(r => Number(r.oos_pct))
+        return avg(vals)
+      }),
+    }))
+    return { dates, series }
+  }, [rows, period])
+
+  const { dates, series } = chartData
+  if (!dates.length) return (
+    <Empty title="No snapshots yet"
+           body="The first daily capture runs at 06:00 EAT. Once it lands, the trend appears here." />
+  )
+
+  const PAD_L = 42, PAD_R = 12, PAD_T = 12, PAD_B = 32
+  const CHART_H = 160
+  const STEP    = Math.max(36, Math.min(60, Math.floor(560 / dates.length)))
+  const CHART_W = Math.max(400, dates.length * STEP)
+  const W = PAD_L + CHART_W + PAD_R
+  const H = PAD_T + CHART_H + PAD_B
+
+  const allVals  = series.flatMap(s => s.points).filter(v => v !== null)
+  const maxVal   = Math.max(10, ...allVals) * 1.15
+  const toY = v  => v === null ? null : PAD_T + CHART_H - (v / maxVal) * CHART_H
+  const toX = i  => PAD_L + i * STEP + STEP / 2
+
+  const yTicks   = [0, 0.25, 0.5, 0.75, 1].map(f => maxVal * f)
+  const xStep    = Math.max(1, Math.ceil(dates.length / 7))
+  const fmtXDate = str => {
+    const d = new Date(str)
+    return d.toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <svg width={W} height={H} aria-label="Core OOS % trend by facility stage">
+        {/* Grid lines */}
+        {yTicks.map(v => {
+          const y = toY(v)
+          return (
+            <g key={v}>
+              <line x1={PAD_L} x2={PAD_L + CHART_W} y1={y} y2={y}
+                    stroke="#e5e7eb" strokeWidth={1} />
+              <text x={PAD_L - 4} y={y + 4} textAnchor="end"
+                    fontSize={9} fill="#9ca3af">
+                {v.toFixed(1)}%
+              </text>
+            </g>
+          )
+        })}
+
+        {/* X-axis labels */}
+        {dates.map((d, i) => {
+          if (i % xStep !== 0) return null
+          return (
+            <text key={d} x={toX(i)} y={H - 6} textAnchor="middle"
+                  fontSize={9} fill="#9ca3af">
+              {fmtXDate(d)}
+            </text>
+          )
+        })}
+
+        {/* Series lines + dots */}
+        {series.map(({ stage, points }) => {
+          const color = OOS_COLORS[stage]
+          // Build polyline segments (split on nulls)
+          const segments = []
+          let seg = []
+          points.forEach((v, i) => {
+            if (v === null) { if (seg.length > 1) segments.push(seg); seg = [] }
+            else seg.push(`${toX(i)},${toY(v)}`)
+          })
+          if (seg.length > 1) segments.push(seg)
+          return (
+            <g key={stage}>
+              {segments.map((s, si) => (
+                <polyline key={si} points={s.join(' ')}
+                  fill="none" stroke={color} strokeWidth={2}
+                  strokeLinejoin="round" strokeLinecap="round" />
+              ))}
+              {points.map((v, i) => v === null ? null : (
+                <circle key={i} cx={toX(i)} cy={toY(v)} r={3}
+                  fill={color} stroke="white" strokeWidth={1.5}>
+                  <title>{fmtXDate(dates[i])}: {v.toFixed(1)}% ({stage})</title>
+                </circle>
+              ))}
+            </g>
+          )
+        })}
+      </svg>
+
+      {/* Legend */}
+      <div className="flex gap-4 mt-2 pl-[42px]">
+        {series.map(({ stage }) => (
+          <span key={stage} className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className="inline-block w-4 h-0.5 rounded-full"
+                  style={{ background: OOS_COLORS[stage], height: 2 }} />
+            <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-white"
+                  style={{ background: OOS_COLORS[stage] }} />
+            {stage}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function StockHistoryReport() {
   const [locations, setLocations] = useState([])
@@ -456,6 +576,10 @@ export default function StockHistoryReport() {
   const [detail,     setDetail]     = useState([])
   const [detailBusy, setDetailBusy] = useState(false)
 
+  // ── Core OOS % snapshot state ────────────────────────────────────────────
+  const [oosRows,   setOosRows]   = useState([])
+  const [oosPeriod, setOosPeriod] = useState(90)  // days; 0 = all time
+
   // ── Accountability state ─────────────────────────────────────────────────
   const [accOrders,    setAccOrders]    = useState([])
   const [accSkuMaps,   setAccSkuMaps]   = useState({})
@@ -470,10 +594,11 @@ export default function StockHistoryReport() {
 
   async function loadBase() {
     setLoading(true)
-    const [locs, snaps, trend] = await Promise.all([
+    const [locs, snaps, trend, oos] = await Promise.all([
       supabase.from('stock_locations').select('id, name, location_type').eq('is_active', true).order('name'),
       supabase.from('stock_snapshots').select('week_start, total_value').eq('status', 'complete').order('week_start'),
       supabase.from('v_stock_class_weekly').select('week_start, location_id, abc_class, sku_count, stock_value'),
+      supabase.from('core_oos_snapshots').select('snapped_at, facility_name, facility_stage, oos_count, oos_pct').order('snapped_at'),
     ])
     if (locs.error || snaps.error || trend.error) {
       setError((locs.error || snaps.error || trend.error).message)
@@ -481,6 +606,7 @@ export default function StockHistoryReport() {
     setLocations(locs.data || [])
     setWeeks((snaps.data || []).map(s => s.week_start))
     setTrendRows(trend.data || [])
+    setOosRows(oos.data || [])
     setLoading(false)
   }
 
@@ -772,6 +898,26 @@ export default function StockHistoryReport() {
                         onClose={() => { setSelection(null); setDetail([]) }} />
               </>
             )}
+          </section>
+
+          {/* Core SKUs O/S % trend */}
+          <section className="mb-10">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-sm font-bold text-gray-800">Core SKUs out-of-stock %</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Daily average per facility stage — lower is better</p>
+              </div>
+              <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+                {ACC_PERIODS.map(p => (
+                  <button key={p.id} onClick={() => setOosPeriod(p.id)}
+                    className={`px-3 py-1.5 text-xs font-bold transition-colors focus:outline-none
+                      ${oosPeriod === p.id ? 'bg-brand text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <OosChart rows={oosRows} period={oosPeriod} />
           </section>
 
           {/* Sell-through accountability */}
