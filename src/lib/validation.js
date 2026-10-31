@@ -77,7 +77,7 @@ export function calculateMaxQty({
   // Proxy demand = missedCount × 2 (conservative estimate of true demand).
   let missedSalesQty = 0
   if (maxDemand === 0 && missedSalesL30D > 0) {
-    const proxyDemand = missedSalesL30D * 2
+    const proxyDemand = missedSalesL30D * 1
     missedSalesQty = Math.max(0, Math.ceil(proxyDemand - hmisStock))
   }
 
