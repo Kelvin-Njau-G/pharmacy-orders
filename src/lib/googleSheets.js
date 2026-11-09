@@ -6,38 +6,53 @@ const API_KEY  = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY
 
 let _cache = null
 let _cacheTime = null
+let _fetchPromise = null   // in-flight promise — shared across all concurrent callers
 const CACHE_MS = 5 * 60 * 1000 // 5 minutes
 
 export async function fetchProducts() {
+  // Return cached result if still fresh
   if (_cache && _cacheTime && Date.now() - _cacheTime < CACHE_MS) return _cache
 
-  const url =
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/SKUs?key=${API_KEY}`
+  // If a fetch is already in flight (e.g. 100+ ProductSearch rows mounting at
+  // the same time), return the same promise instead of firing another request.
+  if (_fetchPromise) return _fetchPromise
 
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Google Sheets error ${res.status}`)
+  _fetchPromise = (async () => {
+    try {
+      const url =
+        `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/SKUs?key=${API_KEY}`
 
-  const json = await res.json()
-  const rows = json.values || []
-  if (rows.length < 2) return []
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Google Sheets error ${res.status}`)
 
-  // Auto-detect column positions from the header row (case-insensitive)
-  const headers = rows[0].map(h => h.toLowerCase().trim())
-  const nameIdx  = headers.findIndex(h => h.includes('product name') || h === 'name')
-  const skuIdx   = headers.findIndex(h => h.includes('sku'))
-  const priceIdx = headers.findIndex(h => h.includes('unit price') || h === 'price')
+      const json = await res.json()
+      const rows = json.values || []
+      if (rows.length < 2) return []
 
-  const products = rows.slice(1)
-    .filter(row => row[nameIdx])
-    .map(row => ({
-      name:      (row[nameIdx]  || '').trim(),
-      sku:       (row[skuIdx]   || '').trim(),
-      unitPrice: parseFloat(row[priceIdx]) || 0,
-    }))
+      // Auto-detect column positions from the header row (case-insensitive)
+      const headers = rows[0].map(h => h.toLowerCase().trim())
+      const nameIdx  = headers.findIndex(h => h.includes('product name') || h === 'name')
+      const skuIdx   = headers.findIndex(h => h.includes('sku'))
+      const priceIdx = headers.findIndex(h => h.includes('unit price') || h === 'price')
 
-  _cache = products
-  _cacheTime = Date.now()
-  return products
+      const products = rows.slice(1)
+        .filter(row => row[nameIdx])
+        .map(row => ({
+          name:      (row[nameIdx]  || '').trim(),
+          sku:       (row[skuIdx]   || '').trim(),
+          unitPrice: parseFloat(row[priceIdx]) || 0,
+        }))
+
+      _cache = products
+      _cacheTime = Date.now()
+      return products
+    } finally {
+      // Always clear the in-flight reference so a future cache-miss starts fresh
+      _fetchPromise = null
+    }
+  })()
+
+  return _fetchPromise
 }
 
 let _oosCache = null
