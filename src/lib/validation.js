@@ -44,6 +44,7 @@ export function calculateMaxQty({
 
   // ── Early returns for special reasons ─────────────────────────────────────
   if (reason === 'Patient Request') return { maxQty: Infinity, limitReason: null }
+  if (reason === 'Untold Orders') return { maxQty: Infinity, limitReason: null }
 
   if (reason === 'Pharmtech/Clinician Request' || reason === 'Specific Brand') {
     const remaining = facilityBudget - otherDiscretionarySpend

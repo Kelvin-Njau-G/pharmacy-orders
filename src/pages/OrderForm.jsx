@@ -18,6 +18,7 @@ const REASONS = [
   'Pharmtech/Clinician Request',
   'Patient Request',
   'Low Quantity in Stock',
+  'Untold Orders',
 ]
 
 const BLANK_ITEM = {
