@@ -588,7 +588,27 @@ export default function StockHistoryReport() {
   const [accTab,       setAccTab]       = useState('staff')
   const [accFacFilter, setAccFacFilter] = useState('all')
 
-  const locationIds = locationId === 'all' ? null : [Number(locationId)]
+  const locationIds = (() => {
+    if (locationId === 'all') return null
+    if (locationId === 'pharmacies') return locations.filter(l => l.location_type !== 'warehouse').map(l => l.id)
+    if (locationId === 'stable' || locationId === 'launch') {
+      const targetStage = locationId === 'stable' ? 'Stable' : 'Launch Phase'
+      // Use only the most recent snapshot per facility to get the current stage
+      const latestByFacility = {}
+      for (const r of oosRows) {
+        if (!latestByFacility[r.facility_name] || r.snapped_at > latestByFacility[r.facility_name].snapped_at) {
+          latestByFacility[r.facility_name] = r
+        }
+      }
+      const stageNames = new Set(
+        Object.values(latestByFacility)
+          .filter(r => r.facility_stage === targetStage)
+          .map(r => r.facility_name)
+      )
+      return locations.filter(l => l.location_type !== 'warehouse' && stageNames.has(l.name)).map(l => l.id)
+    }
+    return [Number(locationId)]
+  })()
 
   useEffect(() => { loadBase() }, [])
 
@@ -761,10 +781,13 @@ export default function StockHistoryReport() {
   }, [filteredAccOrders, accSkuMaps])
 
   // ── Trend/matrix computed values ─────────────────────────────────────────
-  const visibleTrend = useMemo(
-    () => (locationId === 'all' ? trendRows : trendRows.filter(r => r.location_id === Number(locationId))),
-    [trendRows, locationId],
-  )
+  const visibleTrend = useMemo(() => {
+    if (locationId === 'all') return trendRows
+    const ids = locationIds
+    if (!ids || ids.length === 0) return []
+    const idSet = new Set(ids)
+    return trendRows.filter(r => idSet.has(r.location_id))
+  }, [trendRows, locationId, locationIds])
 
   const latest = weeks[weeks.length - 1]
   const latestTotals = useMemo(() => {
@@ -788,11 +811,18 @@ export default function StockHistoryReport() {
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium bg-white
               focus:outline-none focus:ring-2 focus:ring-brand">
             <option value="all">All locations</option>
-            {locations.map(l => (
-              <option key={l.id} value={l.id}>
-                {l.name}{l.location_type === 'warehouse' ? ' (warehouse)' : ''}
-              </option>
-            ))}
+            <optgroup label="By stage">
+              <option value="pharmacies">All pharmacies (excl. warehouse)</option>
+              <option value="stable">Stable facilities</option>
+              <option value="launch">Launch Phase facilities</option>
+            </optgroup>
+            <optgroup label="Individual location">
+              {locations.map(l => (
+                <option key={l.id} value={l.id}>
+                  {l.name}{l.location_type === 'warehouse' ? ' (warehouse)' : ''}
+                </option>
+              ))}
+            </optgroup>
           </select>
         </div>
 
