@@ -229,6 +229,29 @@ function Matrix({ cells, metric, onSelect, selected }) {
 }
 
 // ── Drill-through ────────────────────────────────────────────────────────────
+function downloadDetailCsv(rows, selection) {
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const headers = ['SKU', 'Product', 'Location', 'Was (KES)', 'Now (KES)', 'Revenue Then (KES)', 'Revenue Now (KES)']
+  const body = rows.map(r => [
+    r.sku || '—',
+    r.product_name || '—',
+    r.location_name || '—',
+    r.opening_value ?? '',
+    r.closing_value ?? '',
+    r.opening_revenue ?? '',
+    r.closing_revenue ?? '',
+  ].map(esc).join(','))
+  const csv  = [headers.map(esc).join(','), ...body].join('\n')
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+  const url  = URL.createObjectURL(blob)
+  const a    = Object.assign(document.createElement('a'), {
+    href: url,
+    download: `stock-movement-${selection.from}-to-${selection.to}-${new Date().toISOString().slice(0,10)}.csv`,
+  })
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 function Detail({ rows, loading, selection, onClose }) {
   if (!selection) return null
   return (
@@ -238,10 +261,18 @@ function Detail({ rows, loading, selection, onClose }) {
           {CLASS_LABEL[selection.from]} → {CLASS_LABEL[selection.to]}
           <span className="ml-2 font-medium text-gray-500">{rows.length} SKUs</span>
         </h3>
-        <button onClick={onClose}
-          className="text-xs font-bold text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-brand rounded px-2 py-1">
-          Close
-        </button>
+        <div className="flex items-center gap-2">
+          {!loading && rows.length > 0 && (
+            <button onClick={() => downloadDetailCsv(rows, selection)}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-brand">
+              ↓ CSV
+            </button>
+          )}
+          <button onClick={onClose}
+            className="text-xs font-bold text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-brand rounded px-2 py-1">
+            Close
+          </button>
+        </div>
       </div>
       {loading ? <Spinner /> : rows.length === 0 ? (
         <p className="px-4 py-8 text-sm text-gray-500 text-center">Nothing moved between these classes.</p>
