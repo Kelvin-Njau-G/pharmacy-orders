@@ -6,6 +6,7 @@ import Navbar from '../components/Navbar'
 import MissedSaleModal from '../components/MissedSaleModal'
 import PricingFeedbackModal from '../components/PricingFeedbackModal'
 import CreditNoteModal from '../components/CreditNoteModal'
+import MpesaIssuesModal from '../components/MpesaIssuesModal'
 import { fetchSellThrough, computeMetrics } from '../lib/sellThrough'
 import StatusBadge from '../components/StatusBadge'
 
@@ -60,7 +61,7 @@ function SellThroughRow({ order, stData }) {
 }
 
 export default function Dashboard() {
-  const { profile, isAdmin, loading: authLoading } = useAuth()
+  const { profile, isAdmin, loading: authLoading, user } = useAuth()
   const navigate = useNavigate()
   const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
@@ -68,6 +69,7 @@ export default function Dashboard() {
   const [missedSaleOpen, setMissedSaleOpen] = useState(false)
   const [pricingFeedbackOpen, setPricingFeedbackOpen] = useState(false)
   const [creditNoteOpen, setCreditNoteOpen] = useState(false)
+  const [mpesaIssuesOpen, setMpesaIssuesOpen] = useState(false)
   const [facilityHasActiveSup, setFacilityHasActiveSup] = useState(false)
 
   useEffect(() => {
@@ -215,6 +217,20 @@ export default function Dashboard() {
                 </svg>
                 Credit Note
               </button>
+
+              {/* M-Pesa Issues */}
+              <button
+                onClick={() => setMpesaIssuesOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600
+                  text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors border border-gray-200
+                  hover:border-gray-300"
+              >
+                <svg className="w-3.5 h-3.5 text-green-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                M-Pesa Issues
+              </button>
             </div>
           </div>
         </div>
@@ -296,6 +312,11 @@ export default function Dashboard() {
       {/* Credit Note Modal — staff only (never shown to admins) */}
       {creditNoteOpen && profile && !isAdmin && (
         <CreditNoteModal profile={profile} onClose={() => setCreditNoteOpen(false)} />
+      )}
+
+      {/* M-Pesa Issues Modal */}
+      {mpesaIssuesOpen && profile && (
+        <MpesaIssuesModal profile={profile} userEmail={user?.email} onClose={() => setMpesaIssuesOpen(false)} />
       )}
     </div>
   )
